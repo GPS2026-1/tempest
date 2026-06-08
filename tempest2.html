@@ -389,7 +389,7 @@ function updateEnemies(dt) {
       if(e.fuseT>=e.fuseInt){
         e.fuseT=0;
         e.lane=stepLane(G.geo,e.lane,e.fuseDir);
-        if(!G.player.dead && G.invinc<=0 && e.lane===G.player.lane) hitPlayer();
+        if(G.player&&!G.player.dead&&G.invinc<=0&&e.lane===G.player.lane) hitPlayer();
       }
       e.fuseDirT+=dt;
       if(e.fuseDirT>=e.fuseDirInt){ e.fuseDirT=0; e.fuseDir*=-1; e.fuseDirInt=0.4+Math.random()*0.8; }
@@ -403,6 +403,7 @@ function updateEnemies(dt) {
       if (e.rimMoveT>=e.rimMoveInt) {
         e.rimMoveT=0;
         // move toward player lane
+        if(!G.player) continue;
         const plane=G.player.lane;
         if (e.lane!==plane) {
           // figure direction toward player (shortest path on closed webs)
@@ -417,7 +418,7 @@ function updateEnemies(dt) {
           e.lane=stepLane(G.geo,e.lane,dir);
           SFX.rimHit();
         }
-        if (e.lane===G.player.lane && !G.player.dead && G.invinc<=0) { hitPlayer(); G.enemies.splice(i,1); continue; }
+        if (G.player&&e.lane===G.player.lane&&!G.player.dead&&G.invinc<=0) { hitPlayer(); G.enemies.splice(i,1); continue; }
       }
       continue;
     }
@@ -463,15 +464,15 @@ function updateEnemies(dt) {
       }
       if (e.type===ET.TANKER) {
         // tanker hits player on contact
-        if (!G.player.dead && G.invinc<=0 && e.lane===G.player.lane) hitPlayer();
+        if (G.player&&!G.player.dead&&G.invinc<=0&&e.lane===G.player.lane) hitPlayer();
         G.enemies.splice(i,1);
         continue;
       }
       if (e.type===ET.FLIPPER) {
         // transition to rim-crawl
         e.state='rim';
-        e.rimDir = G.player.lane>e.lane ? 1 : -1;
-        if(e.lane===G.player.lane && !G.player.dead && G.invinc<=0){ hitPlayer(); G.enemies.splice(i,1); }
+        e.rimDir = G.player ? (G.player.lane>e.lane ? 1 : -1) : 1;
+        if(G.player&&e.lane===G.player.lane&&!G.player.dead&&G.invinc<=0){ hitPlayer(); G.enemies.splice(i,1); }
         continue;
       }
     }
@@ -480,7 +481,7 @@ function updateEnemies(dt) {
   // Enemy bullets travel toward rim
   for(let i=G.eBullets.length-1;i>=0;i--){
     const b=G.eBullets[i]; b.depth-=b.speed*dt;
-    if(b.depth<=0){ if(!G.player.dead&&G.invinc<=0&&b.lane===G.player.lane) hitPlayer(); G.eBullets.splice(i,1); }
+    if(b.depth<=0){ if(G.player&&!G.player.dead&&G.invinc<=0&&b.lane===G.player.lane) hitPlayer(); G.eBullets.splice(i,1); }
   }
 }
 
@@ -554,7 +555,7 @@ function killEnemy(e, zap) {
 function basePoints(e){ return [150,100,50,250][e.type]||100; }
 
 function hitPlayer() {
-  if(G.invinc>0||G.player.dead) return;
+  if(!G.player||G.invinc>0||G.player.dead) return;
   G.player.dead=true; G.player.visible=false;
   G.lives--;
   G.flash={r:255,g:30,b:0,a:1.0};
@@ -981,9 +982,11 @@ function drawAttractScreen() {
   const defIdx=Math.floor(t*0.25)%LEVEL_DEFS.length;
   const spinGeo=buildGeo(LEVEL_DEFS[defIdx],CX,CY,RAD*0.88);
   const spinCol=LEVEL_DEFS[defIdx].c;
+  const _savedPlayer=G.player, _savedGlow=G.laneGlow;
   G.laneGlow=new Array(spinGeo.n).fill(0);
-  G.player=null;
+  G.player=null; // suppress lane highlight inside drawWeb
   drawWeb(spinGeo,spinCol);
+  G.player=_savedPlayer; G.laneGlow=_savedGlow; // always restore
 
   ctx.save();
   ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -1091,7 +1094,7 @@ function loop(ts) {
 
     case GS.ATTRACT:
       handleInput(dt);
-      drawAttractScreen();
+      if(G.state===GS.ATTRACT) drawAttractScreen(); // guard: don't draw if Space just changed state
       break;
 
     case GS.PLAYING: {
