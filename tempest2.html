@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TEMPEST II</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; overflow:hidden; }
+canvas { display:block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+// ============================================================
+// SECTION 1 — CONSTANTS & CANVAS
+// ============================================================
+
+const GS = { ATTRACT:0, PLAYING:1, DEAD_PAUSE:2, FLYTHROUGH:3, LEVEL_TITLE:4, GAME_OVER:5 };
+const ET = { FLIPPER:0, TANKER:1, SPIKER:2, FUSEBALL:3 };
+const INNER_T = [0.25, 0.5, 0.75];
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let W=0, H=0, CX=0, CY=0, RAD=0;
+
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  CX = W/2; CY = H/2;
+  RAD = Math.min(W,H) * 0.40;
+  if (G && G.state !== GS.ATTRACT) rebuildGeo();
+}
+window.addEventListener('resize', resize);
+
+// ============================================================
+// SECTION 2 — WEB GEOMETRY
+// ============================================================
+
+// All shapes: r is circumradius. Every shape fits within circle of radius r.
+// closed:true = wrapping lane movement; closed:false = clamped (open web).
+
+const SHAPES = [
+  { name:'CIRCLE',   closed:true,
+    rim(cx,cy,r){ return arr(16, i=>{ const a=ang(i,16,-Math.PI/2); return pt(cx+Math.cos(a)*r, cy+Math.sin(a)*r); }); }
+  },
+  { name:'TRIANGLE', closed:true,
+    rim(cx,cy,r){
+      const P=[], S=3, seg=5;
+      for(let s=0;s<S;s++){
+        const p1=pt(cx+Math.cos(ang(s,S,-Math.PI/2))*r, cy+Math.sin(ang(s,S,-Math.PI/2))*r);
+        const p2=pt(cx+Math.cos(ang(s+1,S,-Math.PI/2))*r, cy+Math.sin(ang(s+1,S,-Math.PI/2))*r);
+        for(let j=0;j<seg;j++) P.push(lerp2(p1,p2,j/seg));
+      }
+      return P;
+    }
+  },
+  { name:'V-OPEN',   closed:false,
+    rim(cx,cy,r){ return arr(9, i=>{ const a=-Math.PI*0.72+(i/8)*Math.PI*1.44; return pt(cx+Math.cos(a)*r, cy+Math.sin(a)*r); }); }
+  },
+  { name:'SQUARE',   closed:true,
+    rim(cx,cy,r){
+      const P=[], S=4, seg=4;
+      for(let s=0;s<S;s++){
+        const p1=pt(cx+Math.cos(ang(s,S,-Math.PI/4))*r, cy+Math.sin(ang(s,S,-Math.PI/4))*r);
+        const p2=pt(cx+Math.cos(ang(s+1,S,-Math.PI/4))*r, cy+Math.sin(ang(s+1,S,-Math.PI/4))*r);
+        for(let j=0;j<seg;j++) P.push(lerp2(p1,p2,j/seg));
+      }
+      return P;
+    }
+  },
+  { name:'ZIGZAG',   closed:false,
+    rim(cx,cy,r){
+      return arr(11, i=>pt( cx+(i/10-0.5)*2*r*0.9, cy+(i%2===0?-1:1)*r*0.45 ));
+    }
+  },
+  { name:'STAR',     closed:true,
+    rim(cx,cy,r){ return arr(16, i=>{ const rr=i%2===0?r:r*0.48; return pt(cx+Math.cos(ang(i,16,-Math.PI/2))*rr, cy+Math.sin(ang(i,16,-Math.PI/2))*rr); }); }
+  },
+  { name:'CROSS',    closed:true,
+    rim(cx,cy,r){
+      const w=r*0.33;
+      return [pt(cx-w,cy-r),pt(cx+w,cy-r),pt(cx+w,cy-w),pt(cx+r,cy-w),pt(cx+r,cy+w),pt(cx+w,cy+w),pt(cx+w,cy+r),pt(cx-w,cy+r),pt(cx-w,cy+w),pt(cx-r,cy+w),pt(cx-r,cy-w),pt(cx-w,cy-w)];
+    }
+  },
+  { name:'CLOVER',   closed:true,
+    rim(cx,cy,r){ return arr(16, i=>{ const a=ang(i,16,-Math.PI/2); const rr=r*(0.62+0.38*Math.cos(4*a)); return pt(cx+Math.cos(a)*rr, cy+Math.sin(a)*rr); }); }
+  },
+];
+
+// Level definitions cycling through shapes. o=open, s=shape index, c=web color
+const LEVEL_DEFS = [
+  {s:0, c:'#00FF00', o:false}, // 1  Circle    green
+  {s:0, c:'#0066FF', o:false}, // 2  Circle    blue
+  {s:2, c:'#FFFF00', o:true }, // 3  V-open    yellow
+  {s:1, c:'#FF2200', o:false}, // 4  Triangle  red
+  {s:4, c:'#FF8800', o:true }, // 5  Zigzag    orange
+  {s:3, c:'#AA00FF', o:false}, // 6  Square    purple
+  {s:5, c:'#FF44FF', o:false}, // 7  Star      magenta
+  {s:6, c:'#00FFCC', o:false}, // 8  Cross     cyan
+  {s:7, c:'#FFFF44', o:false}, // 9  Clover    yellow-green
+  {s:0, c:'#FF0000', o:false}, // 10 Circle    red (harder)
+  {s:1, c:'#FF44FF', o:false}, // 11 Triangle  magenta
+  {s:2, c:'#00FFFF', o:true }, // 12 V-open    cyan
+  {s:3, c:'#FF8800', o:false}, // 13 Square    orange
+  {s:4, c:'#AAFFAA', o:true }, // 14 Zigzag    lt-green
+  {s:5, c:'#FF2222', o:false}, // 15 Star      bright-red
+  {s:6, c:'#FFAA44', o:false}, // 16 Cross     amber
+];
+
+function getLevelDef(lv) { return LEVEL_DEFS[(lv-1) % LEVEL_DEFS.length]; }
+
+// Helpers
+function pt(x,y){ return {x,y}; }
+function arr(n,f){ return Array.from({length:n},(_,i)=>f(i)); }
+function ang(i,n,off=0){ return (i/n)*Math.PI*2+off; }
+function lerp2(a,b,t){ return pt(a.x+(b.x-a.x)*t, a.y+(b.y-a.y)*t); }
+function lerpS(a,b,t){ return a+(b-a)*t; }
+function clamp(v,lo,hi){ return v<lo?lo:v>hi?hi:v; }
+function smoothstep(t){ return t*t*(3-2*t); }
+function dist2(a,b){ const dx=a.x-b.x,dy=a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
+
+function buildGeo(def, cx, cy, r) {
+  const shape  = SHAPES[def.s % SHAPES.length];
+  const rimPts = shape.rim(cx, cy, r);
+  const n      = rimPts.length;
+  const center = pt(cx, cy);
+  const lanes  = rimPts.map((rA,i)=>{
+    const rB = rimPts[(i+1) % n];
+    return { rA, rB, mid: pt((rA.x+rB.x)/2,(rA.y+rB.y)/2) };
+  });
+  return { lanes, rimPts, center, n, r, closed:def.o===false, def };
+}
+
+function rebuildGeo() {
+  const def = getLevelDef(G.level);
+  G.geo = buildGeo(def, CX, CY, RAD);
+  G.laneGlow = new Array(G.geo.n).fill(0);
+}
+
+// Position in a lane at given depth (0=rim, 1=center)
+function lanePt(geo, lane, depth) {
+  const l = geo.lanes[((lane % geo.n)+geo.n) % geo.n];
+  return lerp2(l.mid, geo.center, depth);
+}
+
+// Screen size scale for an object at depth d (perspective effect)
+function depthScale(d) { return Math.max(0.05, 1 - d*0.92); }
+
+// Wrap or clamp lane index based on web type
+function stepLane(geo, lane, dir) {
+  const n = geo.n;
+  if (geo.closed) return ((lane+dir)+n) % n;
+  return clamp(lane+dir, 0, n-1);
+}
+
+// Shared spoke index between lane i and lane i+1 (right side of lane i)
+function rightSpoke(lane, n) { return (lane+1) % n; }
+
+// ============================================================
+// SECTION 3 — AUDIO ENGINE
+// ============================================================
+
+let AC = null;
+let warp = { osc:null, lfo:null, lfoG:null, vca:null, started:false };
+let flySound = { src:null, gain:null, active:false };
+
+function getAC() {
+  if (!AC) AC = new (window.AudioContext||window.webkitAudioContext)();
+  return AC;
+}
+function resumeAC() { try{ if(AC&&AC.state==='suspended') AC.resume(); }catch(e){} }
+
+function startWarpOsc() {
+  if (warp.started) return;
+  warp.started = true;
+  const ac = getAC();
+  const osc  = ac.createOscillator();
+  const lfo  = ac.createOscillator();
+  const lfoG = ac.createGain();
+  const vca  = ac.createGain();
+  const dist = ac.createWaveShaper();
+  // soft clipper
+  const curve = new Float32Array(512);
+  for(let i=0;i<512;i++){ const x=i/256-1; curve[i]=Math.tanh(x*2.5)*0.85; }
+  dist.curve = curve;
+  osc.type='sawtooth'; lfo.type='sine';
+  lfo.connect(lfoG); lfoG.connect(osc.frequency);
+  osc.connect(dist); dist.connect(vca); vca.connect(ac.destination);
+  osc.frequency.value=100; lfo.frequency.value=4; lfoG.gain.value=25; vca.gain.value=0;
+  osc.start(); lfo.start();
+  warp = { osc, lfo, lfoG, vca, started:true };
+}
+
+function setWarpIntensity(v) { // 0..1
+  if (!warp.started) return;
+  const ac=getAC(), t=ac.currentTime;
+  warp.osc.frequency.setTargetAtTime(90+v*180,   t, 0.06);
+  warp.lfo.frequency.setTargetAtTime(3+v*18,      t, 0.06);
+  warp.lfoG.gain.setTargetAtTime(20+v*90,         t, 0.06);
+  warp.vca.gain.setTargetAtTime(v*0.22,            t, 0.06);
+}
+
+function tone(freq, type, dur, gain, freqEnd) {
+  try {
+    const ac=getAC(), o=ac.createOscillator(), g=ac.createGain();
+    o.type=type; o.frequency.setValueAtTime(freq, ac.currentTime);
+    if(freqEnd) o.frequency.exponentialRampToValueAtTime(freqEnd, ac.currentTime+dur);
+    g.gain.setValueAtTime(gain, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime+dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(); o.stop(ac.currentTime+dur);
+  }catch(e){}
+}
+
+function noise(dur, gain, lpFreq) {
+  try {
+    const ac=getAC(), sz=Math.ceil(ac.sampleRate*dur);
+    const buf=ac.createBuffer(1,sz,ac.sampleRate);
+    const d=buf.getChannelData(0); for(let i=0;i<sz;i++) d[i]=(Math.random()*2-1)*Math.exp(-i/sz*6);
+    const src=ac.createBufferSource(); src.buffer=buf;
+    const g=ac.createGain(); g.gain.setValueAtTime(gain, ac.currentTime); g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime+dur);
+    if(lpFreq){ const f=ac.createBiquadFilter(); f.type='lowpass'; f.frequency.value=lpFreq; src.connect(f); f.connect(g); } else { src.connect(g); }
+    g.connect(ac.destination); src.start();
+  }catch(e){}
+}
+
+const SFX = {
+  fire()          { tone(2400,'square',0.055,0.32,900); },
+  flipperFlip()   { tone(280+Math.random()*80,'square',0.04,0.07); },
+  flipperShoot()  { tone(550,'sawtooth',0.11,0.18,140); },
+  explode(big)    { noise(big?0.45:0.22, big?0.65:0.38, big?2000:4500); tone(big?250:180,'sawtooth',big?0.3:0.15,0.14,35); },
+  hitTanker()     { tone(120,'square',0.06,0.15,80); noise(0.06,0.12,800); },
+  death()         { tone(700,'sawtooth',0.9,0.48,28); noise(0.6,0.45,3000); },
+  zapper()        { tone(80,'sawtooth',0.55,0.6,3500); noise(0.5,0.42,8000); },
+  levelDone()     { [523,659,784,1047,1319].forEach((f,i)=>setTimeout(()=>tone(f,'square',0.18,0.22),i*95)); },
+  flyThrough()    { tone(300,'sawtooth',1.8,0.25,2000); noise(1.8,0.18,5000); },
+  levelTitle()    { tone(880,'square',0.12,0.2); },
+  rimHit()        { noise(0.1,0.3,1000); tone(200,'square',0.1,0.2,80); },
+};
+
+// ============================================================
+// SECTION 4 — INPUT
+// ============================================================
+
+const KEYS={}, JP={};
+window.addEventListener('keydown', e=>{ if(!KEYS[e.code]) JP[e.code]=true; KEYS[e.code]=true; e.preventDefault(); });
+window.addEventListener('keyup',   e=>{ KEYS[e.code]=false; });
+let moveCool=0, fireCool=0;
+
+// ============================================================
+// SECTION 5 — GAME STATE
+// ============================================================
+
+let G = null;
+
+function newGame() {
+  G = {
+    state:  GS.ATTRACT,
+    level:  1,
+    score:  0,
+    hi:     parseInt(localStorage.getItem('t2hi')||'0'),
+    lives:  3,
+    geo:    null,
+    laneGlow: [],
+
+    player: { lane:0, dead:false, visible:true, blinkT:0 },
+    bullets:  [],   // { lane, depth, speed }
+    eBullets: [],   // { lane, depth, speed }
+    enemies:  [],
+    spikes:   [],   // { lane, tipD } tipD=depth of spike tip (rim side), baseD=center side
+
+    explosions: [],
+    scorePopups:[],
+    rimSparks:  [],
+
+    flash:   { r:0,g:0,b:0,a:0 },
+    shake:   { x:0,y:0,t:0 },
+    warpInt: 0,     // 0..1 warp intensity
+
+    zapper:    { uses:2 },
+    invinc:    0,
+    spawnT:    0, spawnInt:2.4, waveLeft:0,
+    cleared:   false,
+    enemyMoveT:0,
+
+    // fly-through state
+    flyDepth:  0,
+    flyLane:   0,
+    flySpeed:  0.45,
+    flyMoveCool: 0,
+
+    // level title
+    titleT: 0,
+
+    dt:0, now:0,
+  };
+}
+
+function startLevel() {
+  const def = getLevelDef(G.level);
+  G.geo      = buildGeo(def, CX, CY, RAD);
+  G.laneGlow = new Array(G.geo.n).fill(0);
+  G.player   = { lane:0, dead:false, visible:true, blinkT:0 };
+  G.bullets  = []; G.eBullets = []; G.enemies = []; G.spikes = [];
+  G.explosions=[]; G.scorePopups=[]; G.rimSparks=[];
+  G.zapper   = { uses:2 };
+  G.invinc   = 0; G.cleared = false;
+  const diff = Math.min(G.level, 16);
+  G.spawnInt = Math.max(0.4, 2.6-diff*0.14);
+  G.waveLeft = 5 + diff*3;
+  G.spawnT   = 0.6;
+  moveCool=0; fireCool=0;
+}
+
+// ============================================================
+// SECTION 6 — ENEMY SPAWNING & AI
+// ============================================================
+
+function spawnEnemy(type, lane) {
+  const n=G.geo.n;
+  const l = lane!==undefined ? lane : Math.floor(Math.random()*n);
+  const diff=Math.min(G.level,16);
+  const baseSpd = 0.05 + diff*0.014;
+  const e = {
+    type, lane:l, depth:0.98, hp: type===ET.TANKER?2:1,
+    state: type===ET.FUSEBALL ? 'rim' : 'climbing',
+    speed: type===ET.TANKER?baseSpd*0.5 : type===ET.SPIKER?baseSpd*0.65 : baseSpd,
+    angle: 0,
+
+    // flipper flip animation
+    flipT:0, flipInt:0.5+Math.random()*0.5,
+    flipProgress:0, flipFrom:l, flipTo:l, flipping:false,
+
+    // rim crawl (flippers that reach the rim)
+    rimDir: 0, rimMoveT:0, rimMoveInt:0.18-diff*0.007,
+
+    // shooting (flippers only)
+    shootT: 1.0+Math.random()*2.0,
+
+    // fuseball
+    fuseT:0, fuseInt:Math.max(0.06, 0.14-diff*0.005), fuseDir:Math.random()<0.5?-1:1,
+    fuseDirT:0, fuseDirInt:0.5+Math.random()*1.0,
+
+    // spiker — track spike growth
+    spikeBase:0.98, // depth of spike's center-side end
+
+    hitFlash:0, trail:[],
+  };
+  G.enemies.push(e);
+}
+
+function pickType() {
+  const lv=G.level, r=Math.random();
+  if (lv<3)  return ET.FLIPPER;
+  if (lv<5)  return r<0.68?ET.FLIPPER:ET.TANKER;
+  if (lv<7)  return r<0.48?ET.FLIPPER:r<0.75?ET.TANKER:ET.SPIKER;
+  return r<0.36?ET.FLIPPER:r<0.55?ET.TANKER:r<0.76?ET.SPIKER:ET.FUSEBALL;
+}
+
+function updateEnemies(dt) {
+  const n=G.geo.n;
+  // spawn wave
+  if (G.waveLeft>0){ G.spawnT-=dt; if(G.spawnT<=0){ G.spawnT=G.spawnInt; spawnEnemy(pickType()); G.waveLeft--; } }
+
+  // drive warp sound from threat level
+  let closestD=1.0, rimCount=0;
+  G.enemies.forEach(e=>{ if(e.depth<closestD)closestD=e.depth; if(e.state==='rim')rimCount++; });
+  const threatBase = G.enemies.length>0 ? (1-closestD) : 0;
+  const threat = Math.min(1, threatBase + rimCount*0.2);
+  G.warpInt = threat;
+  setWarpIntensity(threat);
+
+  for (let i=G.enemies.length-1; i>=0; i--) {
+    const e=G.enemies[i];
+    e.angle += dt*10;
+    // trail
+    const tp=lanePt(G.geo,e.lane,e.depth);
+    e.trail.push({x:tp.x,y:tp.y,a:0.5}); if(e.trail.length>5) e.trail.shift();
+    e.trail.forEach(t=>t.a-=dt*5);
+    if(e.hitFlash>0) e.hitFlash=Math.max(0,e.hitFlash-dt*5);
+
+    // ── FUSEBALL ─────────────────────────────────────────────
+    if (e.type===ET.FUSEBALL) {
+      e.depth=0; // always on rim
+      e.fuseT+=dt;
+      if(e.fuseT>=e.fuseInt){
+        e.fuseT=0;
+        e.lane=stepLane(G.geo,e.lane,e.fuseDir);
+        if(!G.player.dead && G.invinc<=0 && e.lane===G.player.lane) hitPlayer();
+      }
+      e.fuseDirT+=dt;
+      if(e.fuseDirT>=e.fuseDirInt){ e.fuseDirT=0; e.fuseDir*=-1; e.fuseDirInt=0.4+Math.random()*0.8; }
+      continue;
+    }
+
+    // ── RIM CRAWL (flippers on rim) ──────────────────────────
+    if (e.state==='rim') {
+      e.depth=0;
+      e.rimMoveT+=dt;
+      if (e.rimMoveT>=e.rimMoveInt) {
+        e.rimMoveT=0;
+        // move toward player lane
+        const plane=G.player.lane;
+        if (e.lane!==plane) {
+          // figure direction toward player (shortest path on closed webs)
+          let dir;
+          if (G.geo.closed) {
+            const cw  = ((plane-e.lane)+n)%n;
+            const ccw = ((e.lane-plane)+n)%n;
+            dir = cw<=ccw ? 1 : -1;
+          } else {
+            dir = plane>e.lane ? 1 : -1;
+          }
+          e.lane=stepLane(G.geo,e.lane,dir);
+          SFX.rimHit();
+        }
+        if (e.lane===G.player.lane && !G.player.dead && G.invinc<=0) { hitPlayer(); G.enemies.splice(i,1); continue; }
+      }
+      continue;
+    }
+
+    // ── CLIMBING ────────────────────────────────────────────
+    e.depth-=e.speed*dt;
+
+    // Spiker: update spike trail
+    if (e.type===ET.SPIKER) {
+      // spike tip is at e.depth, base at e.spikeBase (stays at spawn depth 0.98)
+      // The spike "follows" the spiker, so we just note the spiker's current depth
+    }
+
+    // Flipper: lane flipping
+    if (e.type===ET.FLIPPER) {
+      e.flipT+=dt;
+      if (!e.flipping && e.flipT>=e.flipInt) {
+        e.flipT=0; e.flipInt=0.45+Math.random()*0.55;
+        const dir=Math.random()<0.5?-1:1;
+        const newLane=stepLane(G.geo,e.lane,dir);
+        if (newLane!==e.lane) {
+          e.flipFrom=e.lane; e.flipTo=newLane; e.flipping=true; e.flipProgress=0;
+          SFX.flipperFlip();
+        }
+      }
+      if (e.flipping) {
+        e.flipProgress+=dt*6; // ~0.17s per flip
+        if (e.flipProgress>=1) { e.flipProgress=1; e.flipping=false; e.lane=e.flipTo; }
+      }
+      // Flipper shooting
+      e.shootT-=dt;
+      if(e.shootT<=0){ e.shootT=1.2+Math.random()*2.0-G.level*0.04; if(e.depth<0.78){ G.eBullets.push({lane:e.lane,depth:e.depth-0.03,speed:0.5+G.level*0.025}); SFX.flipperShoot(); } }
+    }
+
+    // Reached rim?
+    if (e.depth<=0) {
+      e.depth=0;
+      if (e.type===ET.SPIKER) {
+        // leave full-lane spike
+        addSpike(e.lane, 0, e.spikeBase);
+        G.enemies.splice(i,1);
+        continue;
+      }
+      if (e.type===ET.TANKER) {
+        // tanker hits player on contact
+        if (!G.player.dead && G.invinc<=0 && e.lane===G.player.lane) hitPlayer();
+        G.enemies.splice(i,1);
+        continue;
+      }
+      if (e.type===ET.FLIPPER) {
+        // transition to rim-crawl
+        e.state='rim';
+        e.rimDir = G.player.lane>e.lane ? 1 : -1;
+        if(e.lane===G.player.lane && !G.player.dead && G.invinc<=0){ hitPlayer(); G.enemies.splice(i,1); }
+        continue;
+      }
+    }
+  }
+
+  // Enemy bullets travel toward rim
+  for(let i=G.eBullets.length-1;i>=0;i--){
+    const b=G.eBullets[i]; b.depth-=b.speed*dt;
+    if(b.depth<=0){ if(!G.player.dead&&G.invinc<=0&&b.lane===G.player.lane) hitPlayer(); G.eBullets.splice(i,1); }
+  }
+}
+
+function addSpike(lane, tipD, baseD) {
+  // Remove any existing spike in this lane first
+  G.spikes = G.spikes.filter(s=>s.lane!==lane);
+  G.spikes.push({ lane, tipD, baseD });
+}
+
+// ============================================================
+// SECTION 7 — BULLETS & COLLISION
+// ============================================================
+
+function updateBullets(dt) {
+  for(let i=G.bullets.length-1;i>=0;i--){
+    const b=G.bullets[i]; b.depth+=b.speed*dt;
+    G.laneGlow[b.lane % G.geo.n]=1.0;
+
+    let hit=false;
+
+    // hit spike?
+    for(let j=G.spikes.length-1;j>=0;j--){
+      const s=G.spikes[j];
+      if(s.lane===b.lane && b.depth>=s.tipD && b.depth<=s.baseD+0.05){
+        addScore(50, lanePt(G.geo,b.lane,s.tipD+0.1));
+        boom(b.lane,s.tipD+0.1,false);
+        G.spikes.splice(j,1); hit=true; break;
+      }
+    }
+
+    // hit enemy?
+    if(!hit){
+      for(let j=G.enemies.length-1;j>=0;j--){
+        const e=G.enemies[j];
+        const eLane = e.flipping ? e.flipFrom : e.lane;
+        if(eLane===b.lane && Math.abs(e.depth-b.depth)<0.08){
+          hit=true; doDamageEnemy(e,j); break;
+        }
+        // also check rim crawlers (depth=0, bullet must reach depth>0.95 to hit)
+        if(e.state==='rim' && e.lane===b.lane && b.depth>=0.9){
+          hit=true; doDamageEnemy(e,j); break;
+        }
+      }
+    }
+    if(hit||b.depth>=1.0) G.bullets.splice(i,1);
+  }
+}
+
+function doDamageEnemy(e, idx) {
+  e.hp--; e.hitFlash=1.0;
+  if(e.hp<=0){ killEnemy(e); G.enemies.splice(idx,1); }
+  else SFX.hitTanker();
+}
+
+function killEnemy(e, zap) {
+  const pts = zap ? Math.floor(basePoints(e)/2) : basePoints(e);
+  addScore(pts, lanePt(G.geo,e.lane,e.depth));
+  boom(e.lane,e.depth, e.type===ET.TANKER);
+  SFX.explode(e.type===ET.TANKER);
+  // Tanker splits into 2 flippers
+  if(e.type===ET.TANKER){
+    spawnEnemy(ET.FLIPPER, e.lane);
+    spawnEnemy(ET.FLIPPER, stepLane(G.geo,e.lane,1));
+  }
+  // Spiker leaves partial spike
+  if(e.type===ET.SPIKER && e.depth>0.05){
+    addSpike(e.lane, e.depth, e.spikeBase);
+  }
+}
+
+function basePoints(e){ return [150,100,50,250][e.type]||100; }
+
+function hitPlayer() {
+  if(G.invinc>0||G.player.dead) return;
+  G.player.dead=true; G.player.visible=false;
+  G.lives--;
+  G.flash={r:255,g:30,b:0,a:1.0};
+  G.shake={x:0,y:0,t:0.6};
+  boom(G.player.lane,0,true);
+  SFX.death();
+  G.state=GS.DEAD_PAUSE;
+  setTimeout(()=>{
+    if(G.lives<=0){ G.state=GS.GAME_OVER; return; }
+    G.player.dead=false; G.player.visible=true;
+    G.invinc=3.0; G.player.blinkT=3.0;
+    G.state=GS.PLAYING;
+  }, 1500);
+}
+
+function fireZapper() {
+  if(G.zapper.uses<=0) return;
+  SFX.zapper();
+  G.flash={r:255,g:255,b:255,a:1.0};
+  G.zapper.uses--;
+  if(G.zapper.uses===1){
+    const all=[...G.enemies]; G.enemies=[];
+    all.forEach(e=>killEnemy(e,true));
+  } else {
+    if(G.enemies.length>0){ const e=G.enemies.splice(0,1)[0]; killEnemy(e,true); }
+  }
+}
+
+function addScore(v, pos) {
+  G.score+=v;
+  if(G.score>G.hi){ G.hi=G.score; localStorage.setItem('t2hi',G.hi); }
+  if(pos) G.scorePopups.push({x:pos.x,y:pos.y,text:'+'+v,t:0,dur:0.7});
+}
+
+// ============================================================
+// SECTION 8 — EFFECTS
+// ============================================================
+
+function boom(lane, depth, big) {
+  const p=lanePt(G.geo,lane,depth);
+  const cnt=big?18:9;
+  const pars=arr(cnt,i=>{ const a=(i/cnt)*Math.PI*2+Math.random()*0.4; const spd=(45+Math.random()*90)*(big?2:1); return {x:p.x,y:p.y,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,life:1}; });
+  G.explosions.push({pars,t:0,dur:big?0.55:0.3});
+}
+
+function updateEffects(dt) {
+  G.explosions.forEach((e,i)=>{ e.t+=dt; const f=e.t/e.dur; e.pars.forEach(p=>{p.x+=p.vx*dt;p.y+=p.vy*dt;p.vx*=0.88;p.vy*=0.88;p.life=1-f;}); });
+  G.explosions = G.explosions.filter(e=>e.t<e.dur);
+  G.scorePopups.forEach(s=>{ s.t+=dt; s.y-=dt*28; }); G.scorePopups=G.scorePopups.filter(s=>s.t<s.dur);
+  if(G.flash.a>0) G.flash.a=Math.max(0,G.flash.a-dt*3.2);
+  if(G.shake.t>0){ G.shake.t-=dt; const m=14*(G.shake.t/0.6); G.shake.x=(Math.random()*2-1)*m; G.shake.y=(Math.random()*2-1)*m; if(G.shake.t<=0){G.shake.x=0;G.shake.y=0;} }
+  for(let i=0;i<G.laneGlow.length;i++) G.laneGlow[i]=Math.max(0,G.laneGlow[i]-dt*6);
+}
+
+// ============================================================
+// SECTION 9 — FLY-THROUGH
+// ============================================================
+
+function startFlythrough() {
+  if (G.state !== GS.PLAYING) return; // guard: don't start if player died during countdown
+  G.state   = GS.FLYTHROUGH;
+  G.flyDepth= 0;
+  G.flyLane = G.player.lane;
+  G.flyMoveCool=0;
+  SFX.flyThrough();
+}
+
+function updateFlythrough(dt) {
+  G.flyMoveCool-=dt;
+  if((KEYS['ArrowLeft']||KEYS['KeyA'])&&G.flyMoveCool<=0){
+    G.flyLane=stepLane(G.geo,G.flyLane,-1); G.flyMoveCool=0.1;
+  }
+  if((KEYS['ArrowRight']||KEYS['KeyD'])&&G.flyMoveCool<=0){
+    G.flyLane=stepLane(G.geo,G.flyLane,1); G.flyMoveCool=0.1;
+  }
+
+  G.flyDepth += G.flySpeed*dt;
+
+  // spike collision during fly-through
+  if(G.lives>0){
+    for(const s of G.spikes){
+      if(s.lane===G.flyLane && G.flyDepth>=s.tipD && G.flyDepth<=s.baseD+0.08){
+        // hit a spike
+        G.lives--;
+        G.flash={r:255,g:100,b:0,a:0.9};
+        G.shake={x:0,y:0,t:0.4};
+        SFX.death();
+        G.spikes=G.spikes.filter(sx=>sx.lane!==s.lane);
+        if(G.lives<=0){ setTimeout(()=>{ G.state=GS.GAME_OVER; },1000); return; }
+        break;
+      }
+    }
+  }
+
+  if(G.flyDepth>=1.0){
+    // fly-through complete
+    G.level++;
+    startLevel();
+    G.titleT=0;
+    G.state=GS.LEVEL_TITLE;
+    SFX.levelTitle();
+  }
+}
+
+// ============================================================
+// SECTION 10 — RENDERING
+// ============================================================
+
+function vecLine(x1,y1,x2,y2){ ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+
+// draw web with optional scale transform (for zoom effects)
+function drawWeb(geo, col, scaleFrom1) {
+  const n=geo.n, rp=geo.rimPts;
+  const cx=geo.center.x, cy=geo.center.y;
+
+  ctx.save();
+  if(scaleFrom1 && scaleFrom1!==1){ ctx.translate(cx,cy); ctx.scale(scaleFrom1,scaleFrom1); ctx.translate(-cx,-cy); }
+
+  ctx.shadowColor=col; ctx.strokeStyle=col;
+
+  // spokes — each gets lane glow modulation
+  for(let i=0;i<n;i++){
+    const gv = G.laneGlow[i]||0;
+    ctx.lineWidth  = 1.4+gv*1.6;
+    ctx.shadowBlur = 8+gv*22;
+    if(gv>0.05) ctx.strokeStyle='#FFFFFF'; else ctx.strokeStyle=col;
+    vecLine(rp[i].x,rp[i].y,cx,cy);
+    ctx.strokeStyle=col;
+  }
+
+  // rim segments
+  ctx.lineWidth=1.8; ctx.shadowBlur=10;
+  for(let i=0;i<n;i++){
+    const j=(i+1)%n;
+    if(!geo.closed && j===0) continue; // open web: don't draw closing segment
+    vecLine(rp[i].x,rp[i].y,rp[j].x,rp[j].y);
+  }
+
+  // player lane highlight on rim
+  if(G.player&&!G.player.dead){
+    const l=geo.lanes[G.player.lane];
+    ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=2.2; ctx.shadowBlur=22;
+    vecLine(l.rA.x,l.rA.y,l.rB.x,l.rB.y);
+    ctx.strokeStyle=col;
+  }
+
+  // inner rings
+  for(const t of INNER_T){
+    ctx.globalAlpha=0.28; ctx.lineWidth=1; ctx.shadowBlur=4;
+    const ipts=rp.map(p=>lerp2(p,geo.center,t));
+    ctx.beginPath(); ctx.moveTo(ipts[0].x,ipts[0].y);
+    for(let i=1;i<n;i++) ctx.lineTo(ipts[i].x,ipts[i].y);
+    if(geo.closed) ctx.closePath();
+    ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+
+  ctx.restore();
+}
+
+function drawClaw(geo, lane, depth, col) {
+  const l   = geo.lanes[lane];
+  const mid = depth===0 ? l.mid : lanePt(geo,lane,depth);
+  const sc  = depthScale(depth);
+  const sz  = Math.min(W,H)*0.030*sc;
+
+  // along-rim direction
+  const dx=l.rB.x-l.rA.x, dy=l.rB.y-l.rA.y;
+  const rl=Math.sqrt(dx*dx+dy*dy)||1;
+  const tx=dx/rl, ty=dy/rl;       // along rim
+  // inward normal
+  const ix=(geo.center.x-l.mid.x), iy=(geo.center.y-l.mid.y);
+  const il=Math.sqrt(ix*ix+iy*iy)||1;
+  const nx=ix/il, ny=iy/il;
+
+  const pL  = {x:mid.x-tx*sz,    y:mid.y-ty*sz};     // left anchor
+  const pR  = {x:mid.x+tx*sz,    y:mid.y+ty*sz};     // right anchor
+  const tip = {x:mid.x+nx*sz*1.1,y:mid.y+ny*sz*1.1}; // inward tip
+  // inner shoulder points (where prongs start)
+  const pLi = {x:mid.x-tx*sz*0.45,y:mid.y-ty*sz*0.45};
+  const pRi = {x:mid.x+tx*sz*0.45,y:mid.y+ty*sz*0.45};
+
+  ctx.save();
+  ctx.strokeStyle=col; ctx.shadowColor=col; ctx.shadowBlur=18; ctx.lineWidth=2; ctx.lineCap='round';
+  // top crossbar
+  vecLine(pL.x,pL.y,pR.x,pR.y);
+  // left prong
+  vecLine(pLi.x,pLi.y,tip.x,tip.y);
+  // right prong
+  vecLine(pRi.x,pRi.y,tip.x,tip.y);
+  // outer verticals
+  vecLine(pL.x,pL.y,pLi.x,pLi.y);
+  vecLine(pR.x,pR.y,pRi.x,pRi.y);
+  ctx.restore();
+}
+
+function drawBullets(geo, bullets, col) {
+  ctx.save();
+  ctx.lineCap='round'; ctx.strokeStyle='#FFFFFF'; ctx.shadowColor=col; ctx.shadowBlur=16; ctx.lineWidth=2.5;
+  for(const b of bullets){
+    const p0=lanePt(geo,b.lane,b.depth);
+    const p1=lanePt(geo,b.lane,Math.min(1,b.depth+0.09));
+    vecLine(p0.x,p0.y,p1.x,p1.y);
+  }
+  ctx.restore();
+}
+
+function drawEBullets(geo, bullets) {
+  ctx.save();
+  ctx.strokeStyle='#FF6600'; ctx.shadowColor='#FF3300'; ctx.shadowBlur=12; ctx.lineWidth=2;
+  for(const b of bullets){
+    const p=lanePt(geo,b.lane,b.depth);
+    const p2=lanePt(geo,b.lane,Math.min(1,b.depth+0.05));
+    ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2); ctx.stroke();
+    vecLine(p.x,p.y,p2.x,p2.y);
+  }
+  ctx.restore();
+}
+
+function drawEnemies(geo, enemies, webCol) {
+  for(const e of enemies){
+    // afterimage trail
+    for(const tr of e.trail){ if(tr.a<=0) continue; ctx.save(); ctx.globalAlpha=tr.a*0.35; ctx.fillStyle=webCol; ctx.beginPath(); ctx.arc(tr.x,tr.y,3,0,Math.PI*2); ctx.fill(); ctx.restore(); }
+
+    const col    = e.hitFlash>0 ? '#FFFFFF' : enemyColor(e.type);
+    const gCol   = e.type===ET.FUSEBALL ? '#FF00FF' : col;
+    const depth  = e.depth;
+    const sc     = depthScale(depth);
+    const sz     = Math.min(W,H)*0.022*sc;
+    let   px, py;
+
+    if(e.type===ET.FLIPPER && e.flipping){
+      // Interpolate position between fromLane and toLane along the spoke axis
+      const fromMid = geo.lanes[e.flipFrom].mid;
+      const toMid   = geo.lanes[e.flipTo].mid;
+      const spoke   = geo.rimPts[rightSpoke(Math.min(e.flipFrom,e.flipTo), geo.n)];
+      const t       = smoothstep(e.flipProgress);
+      // orbit around spoke point
+      const d0 = dist2(fromMid, spoke), d1=dist2(toMid,spoke);
+      const r0 = lerp2(spoke,fromMid,1); const r1=lerp2(spoke,toMid,1);
+      const a0 = Math.atan2(fromMid.y-spoke.y, fromMid.x-spoke.x);
+      const a1 = Math.atan2(toMid.y-spoke.y,   toMid.x-spoke.x);
+      let da = a1-a0;
+      if(da>Math.PI) da-=Math.PI*2; if(da<-Math.PI) da+=Math.PI*2;
+      const curA = a0+da*t;
+      const rad  = lerpS(d0,d1,t);
+      // blend depth between spokes
+      const interp = lanePt(geo, e.flipping && t<0.5 ? e.flipFrom : e.flipTo, depth);
+      px = spoke.x + Math.cos(curA)*rad;
+      py = spoke.y + Math.sin(curA)*rad;
+      // depth-correct y toward center
+      px = lerpS(px, interp.x, 0.0);
+      py = lerpS(py, interp.y, 0.0);
+    } else {
+      const p = lanePt(geo, e.lane, depth);
+      px=p.x; py=p.y;
+    }
+
+    ctx.save();
+    ctx.translate(px,py);
+    ctx.strokeStyle=col; ctx.shadowColor=gCol; ctx.shadowBlur=12+sc*8; ctx.lineWidth=1.6; ctx.lineCap='round';
+
+    switch(e.type){
+      case ET.FLIPPER: {
+        // Two paddle wings that rotate around lane axis
+        const flipA = e.flipping ? Math.PI*smoothstep(e.flipProgress) : 0;
+        ctx.rotate(e.angle*0.5 + flipA);
+        ctx.lineWidth=1.8;
+        // wing 1
+        ctx.beginPath(); ctx.moveTo(-sz*1.3,sz*0.2); ctx.lineTo(0,-sz*1.0); ctx.lineTo(sz*1.3,sz*0.2); ctx.stroke();
+        // wing 2
+        ctx.beginPath(); ctx.moveTo(-sz*0.9,-sz*0.2); ctx.lineTo(0,sz*1.0); ctx.lineTo(sz*0.9,-sz*0.2); ctx.stroke();
+        // center connector
+        ctx.lineWidth=1.2;
+        ctx.beginPath(); ctx.moveTo(-sz*1.3,sz*0.2); ctx.lineTo(-sz*0.9,-sz*0.2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(sz*1.3,sz*0.2); ctx.lineTo(sz*0.9,-sz*0.2); ctx.stroke();
+        break;
+      }
+      case ET.TANKER: {
+        // Double concentric oval, pulsing with angle
+        const p=1+0.18*Math.sin(e.angle*2.5);
+        ctx.lineWidth=1.8;
+        ctx.beginPath(); ctx.ellipse(0,0,sz*1.5*p,sz*1.1*p,0,0,Math.PI*2); ctx.stroke();
+        ctx.beginPath(); ctx.ellipse(0,0,sz*0.7*p,sz*0.5*p,0,0,Math.PI*2); ctx.stroke();
+        // radial lines
+        ctx.lineWidth=1.2;
+        for(let k=0;k<6;k++){ const ka=k/6*Math.PI*2+e.angle; ctx.beginPath(); ctx.moveTo(Math.cos(ka)*sz*0.7,Math.sin(ka)*sz*0.5); ctx.lineTo(Math.cos(ka)*sz*1.5,Math.sin(ka)*sz*1.1); ctx.stroke(); }
+        break;
+      }
+      case ET.SPIKER: {
+        // Arrowhead pointing toward rim
+        ctx.rotate(e.angle*0.8);
+        ctx.lineWidth=1.6;
+        ctx.beginPath(); ctx.moveTo(0,-sz*1.4); ctx.lineTo(sz*0.8,sz*0.8); ctx.lineTo(0,sz*0.3); ctx.lineTo(-sz*0.8,sz*0.8); ctx.closePath(); ctx.stroke();
+        break;
+      }
+      case ET.FUSEBALL: {
+        // Jagged electric corona (re-randomized each frame)
+        ctx.lineWidth=1.5;
+        const spk=6+Math.floor(Math.random()*3);
+        for(let k=0;k<spk;k++){
+          const a=(k/spk)*Math.PI*2+e.angle*0.7;
+          const r1=sz*(0.3+Math.random()*0.4);
+          const r2=sz*(0.7+Math.random()*0.7);
+          const am=(a+a2(k,spk))/2;
+          ctx.beginPath();
+          ctx.moveTo(0,0);
+          ctx.lineTo(Math.cos(a)*r1+Math.random()*sz*0.2-sz*0.1, Math.sin(a)*r1+Math.random()*sz*0.2-sz*0.1);
+          ctx.lineTo(Math.cos(a)*r2, Math.sin(a)*r2);
+          ctx.stroke();
+        }
+        // bright core
+        ctx.fillStyle='#FFCCFF'; ctx.shadowBlur=25;
+        ctx.beginPath(); ctx.arc(0,0,sz*0.35,0,Math.PI*2); ctx.fill();
+        break;
+      }
+    }
+    ctx.restore();
+  }
+}
+function a2(i,n){ return ((i+1)/n)*Math.PI*2; }
+function enemyColor(t){ return [['#FF7700'],['#FF2222'],['#EEFF00'],['#FF44FF']][t][0]; }
+
+function drawSpikes(geo, spikes, col) {
+  ctx.save();
+  ctx.strokeStyle='#CCCC00'; ctx.shadowColor='#FFFF00'; ctx.lineWidth=2;
+  for(const s of spikes){
+    const p0=lanePt(geo,s.lane,s.tipD);
+    const p1=lanePt(geo,s.lane,Math.min(s.baseD,0.99));
+    ctx.shadowBlur=10;
+    // dashed spike line
+    ctx.setLineDash([5,4]);
+    vecLine(p0.x,p0.y,p1.x,p1.y);
+    ctx.setLineDash([]);
+    // tip dot
+    ctx.fillStyle='#FFFF44'; ctx.shadowBlur=16;
+    ctx.beginPath(); ctx.arc(p0.x,p0.y,3.5,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Draw spike trail behind a climbing Spiker (live, growing)
+function drawLiveSpikeTrails(geo, enemies) {
+  ctx.save();
+  ctx.strokeStyle='#BBBB00'; ctx.shadowColor='#FFFF44'; ctx.shadowBlur=7; ctx.lineWidth=1.8;
+  ctx.setLineDash([4,4]);
+  for(const e of enemies){
+    if(e.type!==ET.SPIKER || e.state!=='climbing') continue;
+    const p0=lanePt(geo,e.lane,e.depth);  // current Spiker position
+    const p1=lanePt(geo,e.lane,e.spikeBase);  // always near 0.98
+    vecLine(p0.x,p0.y,p1.x,p1.y);
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawExplosions() {
+  ctx.save(); ctx.lineWidth=1.8; ctx.lineCap='round';
+  for(const exp of G.explosions){
+    for(const p of exp.pars){
+      if(p.life<=0) continue;
+      const g=Math.floor(180*p.life);
+      ctx.strokeStyle=`rgba(255,${g},0,${p.life})`;
+      ctx.shadowColor=`rgb(255,${g},0)`; ctx.shadowBlur=8;
+      ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x-p.vx*0.055,p.y-p.vy*0.055); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawScorePopups() {
+  ctx.save(); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font=`bold ${Math.min(W,H)*0.025}px monospace`;
+  for(const sp of G.scorePopups){
+    ctx.globalAlpha=1-sp.t/sp.dur; ctx.fillStyle='#FFFF66'; ctx.shadowColor='#FFAA00'; ctx.shadowBlur=10;
+    ctx.fillText(sp.text,sp.x,sp.y);
+  }
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+function drawScreenFlash() {
+  if(G.flash.a<=0) return;
+  ctx.save(); ctx.globalAlpha=G.flash.a; ctx.fillStyle=`rgb(${G.flash.r},${G.flash.g},${G.flash.b})`; ctx.fillRect(0,0,W,H); ctx.restore();
+}
+
+// ============================================================
+// SECTION 11 — HUD & SCREENS
+// ============================================================
+
+function drawHUD(col) {
+  const sz=Math.min(W,H)*0.026;
+  ctx.save();
+  ctx.textBaseline='top'; ctx.shadowColor=col; ctx.shadowBlur=10; ctx.font=`bold ${sz}px monospace`;
+
+  ctx.fillStyle='#CCFFCC'; ctx.textAlign='left';  ctx.fillText(`${G.score}`,18,12);
+  ctx.fillStyle='#FFDD66'; ctx.textAlign='right'; ctx.fillText(`HI  ${G.hi}`,W-18,12);
+
+  ctx.font=`${sz*0.75}px monospace`;
+  ctx.fillStyle=col; ctx.textAlign='left'; ctx.fillText(`LV ${G.level}  ${SHAPES[getLevelDef(G.level).s].name}`,18,14+sz*1.1);
+
+  // lives — claw icons
+  const ly=12+sz*0.25;
+  for(let i=0;i<G.lives;i++){
+    const lx=W/2+(i-(G.lives-1)/2)*22;
+    ctx.save();
+    ctx.strokeStyle='#AAFFAA'; ctx.shadowColor='#44FF44'; ctx.shadowBlur=8; ctx.lineWidth=1.4;
+    const s=8;
+    vecLine(lx-s,ly+s/2,lx,ly-s/2); vecLine(lx,ly-s/2,lx+s,ly+s/2); vecLine(lx-s*0.5,ly+s/2,lx,ly+s*0.1); vecLine(lx,ly+s*0.1,lx+s*0.5,ly+s/2);
+    ctx.restore();
+  }
+
+  // zapper status
+  ctx.font=`${sz*0.68}px monospace`;
+  ctx.fillStyle=G.zapper.uses>0?'#FFAA00':'#443300';
+  ctx.textAlign='left'; ctx.textBaseline='bottom'; ctx.shadowColor='#FFAA00';
+  ctx.fillText(`[Z] ZAPPER ×${G.zapper.uses}`,18,H-14);
+
+  ctx.restore();
+}
+
+function drawAttractScreen() {
+  const sz=Math.min(W,H);
+  const t=G.now*0.001;
+  // animated spinning web
+  const defIdx=Math.floor(t*0.25)%LEVEL_DEFS.length;
+  const spinGeo=buildGeo(LEVEL_DEFS[defIdx],CX,CY,RAD*0.88);
+  const spinCol=LEVEL_DEFS[defIdx].c;
+  G.laneGlow=new Array(spinGeo.n).fill(0);
+  G.player=null;
+  drawWeb(spinGeo,spinCol);
+
+  ctx.save();
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  const fl=0.82+0.18*Math.sin(t*33);
+  ctx.globalAlpha=fl;
+  ctx.font=`bold ${sz*0.12}px monospace`;
+  ctx.fillStyle=spinCol; ctx.shadowColor=spinCol; ctx.shadowBlur=45;
+  ctx.fillText('TEMPEST',CX,CY-sz*0.13);
+  ctx.globalAlpha=1;
+  ctx.font=`bold ${sz*0.040}px monospace`;
+  ctx.fillStyle='#FFFFFF'; ctx.shadowColor='#888'; ctx.shadowBlur=12;
+  ctx.fillText('INSERT COIN  ·  PRESS SPACE',CX,CY+sz*0.03);
+  ctx.font=`${sz*0.024}px monospace`;
+  ctx.fillStyle='#AAAAAA'; ctx.shadowBlur=5;
+  ctx.fillText('← → MOVE   SPACE FIRE   Z SUPER-ZAPPER',CX,CY+sz*0.10);
+  ctx.restore();
+}
+
+function drawGameOverScreen() {
+  const sz=Math.min(W,H);
+  ctx.save();
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.font=`bold ${sz*0.10}px monospace`;
+  ctx.fillStyle='#FF2222'; ctx.shadowColor='#FF0000'; ctx.shadowBlur=40;
+  ctx.fillText('GAME OVER',CX,CY-sz*0.08);
+  ctx.font=`${sz*0.045}px monospace`;
+  ctx.fillStyle='#CCFFCC'; ctx.shadowColor='#33FF33'; ctx.shadowBlur=12;
+  ctx.fillText(`SCORE  ${G.score}`,CX,CY+sz*0.01);
+  ctx.font=`${sz*0.034}px monospace`;
+  ctx.fillStyle='#FFDD66'; ctx.shadowColor='#FFAA00'; ctx.shadowBlur=10;
+  ctx.fillText(`HIGH SCORE  ${G.hi}`,CX,CY+sz*0.08);
+  const blink=Math.floor(G.now/500)%2;
+  if(blink){ ctx.font=`bold ${sz*0.036}px monospace`; ctx.fillStyle='#FFFFFF'; ctx.shadowBlur=8; ctx.fillText('PRESS SPACE TO PLAY AGAIN',CX,CY+sz*0.17); }
+  ctx.restore();
+}
+
+function drawLevelTitleScreen() {
+  const def=getLevelDef(G.level);
+  const sz=Math.min(W,H);
+  const f=Math.min(1,(G.titleT/0.4));
+  ctx.save();
+  ctx.globalAlpha=f;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.font=`bold ${sz*0.065}px monospace`;
+  ctx.fillStyle=def.c; ctx.shadowColor=def.c; ctx.shadowBlur=35;
+  ctx.fillText(`LEVEL  ${G.level}`,CX,CY-sz*0.04);
+  ctx.font=`${sz*0.036}px monospace`;
+  ctx.fillStyle='#AAAAAA'; ctx.shadowBlur=8;
+  ctx.fillText(SHAPES[def.s].name + (def.o===true ? '  [OPEN]' : ''),CX,CY+sz*0.04);
+  ctx.restore();
+}
+
+// fly-through overlay: highlight spiked lanes in danger color
+function drawFlythroughOverlay(geo, flyLane, flyDepth) {
+  // Danger highlights for spiked lanes
+  for(const s of G.spikes){
+    const p0=lanePt(geo,s.lane,s.tipD), p1=lanePt(geo,s.lane,Math.min(s.baseD,0.99));
+    ctx.save(); ctx.strokeStyle='#FF2200'; ctx.shadowColor='#FF0000'; ctx.shadowBlur=20; ctx.lineWidth=3;
+    vecLine(p0.x,p0.y,p1.x,p1.y); ctx.restore();
+  }
+  // Player claw getting smaller toward center
+  const col='#CCFFCC';
+  if(flyDepth<1) drawClaw(geo, flyLane, flyDepth, col);
+}
+
+// ============================================================
+// SECTION 12 — INPUT HANDLER
+// ============================================================
+
+function handleInput(dt) {
+  moveCool-=dt; fireCool-=dt;
+
+  if(G.state===GS.ATTRACT||G.state===GS.GAME_OVER){
+    if(JP['Space']||JP['Enter']){
+      newGame(); startLevel(); G.state=GS.LEVEL_TITLE; G.titleT=0;
+      startWarpOsc(); resumeAC(); SFX.levelTitle();
+    }
+    return;
+  }
+  if(G.state!==GS.PLAYING) return;
+  if(!G.player||G.player.dead) return;
+
+  const n=G.geo.n;
+  if((KEYS['ArrowLeft']||KEYS['KeyA'])&&moveCool<=0){ G.player.lane=stepLane(G.geo,G.player.lane,-1); moveCool=0.09; }
+  if((KEYS['ArrowRight']||KEYS['KeyD'])&&moveCool<=0){ G.player.lane=stepLane(G.geo,G.player.lane,1); moveCool=0.09; }
+  if(KEYS['Space']&&fireCool<=0){ G.bullets.push({lane:G.player.lane,depth:0.05,speed:2.2}); fireCool=0.14; SFX.fire(); }
+  if(JP['KeyZ']) fireZapper();
+}
+
+// ============================================================
+// SECTION 13 — GAME LOOP
+// ============================================================
+
+let lastT=0;
+newGame(); resize();
+
+function loop(ts) {
+  const dt=Math.min((ts-lastT)/1000,0.05); lastT=ts;
+  G.dt=dt; G.now=ts;
+
+  // clear
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+
+  switch(G.state) {
+
+    case GS.ATTRACT:
+      handleInput(dt);
+      drawAttractScreen();
+      break;
+
+    case GS.PLAYING: {
+      handleInput(dt);
+      // invincibility blink
+      if(G.invinc>0){
+        G.invinc-=dt; G.player.blinkT-=dt;
+        G.player.visible=Math.floor(G.player.blinkT*9)%2===0;
+        if(G.invinc<=0){G.invinc=0;G.player.visible=true;}
+      }
+      updateBullets(dt);
+      updateEnemies(dt);
+      updateEffects(dt);
+
+      // spike standing collision
+      if(G.player&&!G.player.dead&&G.invinc<=0){
+        for(const s of G.spikes){ if(s.lane===G.player.lane&&s.tipD<=0){ hitPlayer(); break; } }
+      }
+
+      // level clear?
+      if(!G.cleared&&G.waveLeft===0&&G.enemies.length===0){
+        G.cleared=true;
+        SFX.levelDone();
+        setTimeout(()=>startFlythrough(),600);
+      }
+
+      const col=getLevelDef(G.level).c;
+      applyShake();
+      drawWeb(G.geo,col);
+      drawLiveSpikeTrails(G.geo,G.enemies);
+      drawSpikes(G.geo,G.spikes,col);
+      drawEnemies(G.geo,G.enemies,col);
+      drawEBullets(G.geo,G.eBullets);
+      drawBullets(G.geo,G.bullets,col);
+      if(G.player&&G.player.visible&&!G.player.dead) drawClaw(G.geo,G.player.lane,0,col==='#0066FF'?'#88CCFF':'#CCFFCC');
+      drawExplosions(); drawScorePopups();
+      drawHUD(col);
+      drawScreenFlash();
+      releaseShake();
+      break;
+    }
+
+    case GS.DEAD_PAUSE: {
+      updateEffects(dt);
+      applyShake();
+      const col2=getLevelDef(G.level).c;
+      drawWeb(G.geo,col2);
+      drawSpikes(G.geo,G.spikes,col2);
+      drawEnemies(G.geo,G.enemies,col2);
+      drawExplosions();
+      drawHUD(col2);
+      drawScreenFlash();
+      releaseShake();
+      break;
+    }
+
+    case GS.FLYTHROUGH: {
+      updateFlythrough(dt);
+      updateEffects(dt);
+      // zoom the web as player descends — scale = 1/(1-flyDepth)
+      const fscale = Math.min(5, 1/(1-G.flyDepth+0.02));
+      const col3=getLevelDef(G.level).c;
+      applyShake();
+      drawWeb(G.geo,col3,fscale);
+      drawFlythroughOverlay(G.geo,G.flyLane,G.flyDepth);
+      drawExplosions();
+      drawScreenFlash();
+      releaseShake();
+      // status
+      ctx.save(); ctx.textAlign='center'; ctx.textBaseline='bottom';
+      ctx.font=`${Math.min(W,H)*0.025}px monospace`;
+      ctx.fillStyle='#AAAAAA'; ctx.fillText('WARP',CX,H-14);
+      ctx.restore();
+      break;
+    }
+
+    case GS.LEVEL_TITLE: {
+      G.titleT+=dt;
+      const col4=getLevelDef(G.level).c;
+      // draw the new web behind the title
+      drawWeb(G.geo,col4);
+      drawLevelTitleScreen();
+      if(G.titleT>=2.0) G.state=GS.PLAYING;
+      break;
+    }
+
+    case GS.GAME_OVER:
+      handleInput(dt);
+      drawGameOverScreen();
+      drawScreenFlash();
+      break;
+  }
+
+  Object.keys(JP).forEach(k=>delete JP[k]);
+  requestAnimationFrame(loop);
+}
+
+let _shaking=false;
+function applyShake(){ if(G.shake.t>0){ ctx.save(); ctx.translate(G.shake.x,G.shake.y); _shaking=true; } }
+function releaseShake(){ if(_shaking){ ctx.restore(); _shaking=false; } }
+
+requestAnimationFrame(t=>{ lastT=t; requestAnimationFrame(loop); });
+</script>
+</body>
+</html>
