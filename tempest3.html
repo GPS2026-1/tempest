@@ -47,11 +47,50 @@ window.addEventListener('resize', resize);
 // SECTION 2 — WEB GEOMETRY
 // ============================================================
 
+// Authentic Tempest 16-shape cycle, in the original arcade order:
+// Circle, Square, Plus, Bow-tie, Cross, Triangle, Clover, V, Steps,
+// U, Flat, Heart, Star, W, Fan, Infinity. The geometry repeats every
+// 16 levels; only the color changes each pass.
+//
+// `edges` traces a normalized vertex list (coords in -1..1) into rim
+// points, subdividing each edge into `per` segments.
+function edges(cx, cy, r, verts, per, closed) {
+  const P=[], m = closed ? verts.length : verts.length-1;
+  for(let s=0;s<m;s++){
+    const a=verts[s], b=verts[(s+1)%verts.length];
+    const pa=pt(cx+a[0]*r, cy+a[1]*r), pb=pt(cx+b[0]*r, cy+b[1]*r);
+    for(let j=0;j<per;j++) P.push(lerp2(pa,pb,j/per));
+  }
+  if(!closed){ const e=verts[verts.length-1]; P.push(pt(cx+e[0]*r, cy+e[1]*r)); }
+  return P;
+}
+
 const SHAPES = [
-  { name:'CIRCLE',   closed:true,
+  { name:'CIRCLE',   closed:true,  // 1
     rim(cx,cy,r){ return arr(16, i=>{ const a=ang(i,16,-Math.PI/2); return pt(cx+Math.cos(a)*r, cy+Math.sin(a)*r); }); }
   },
-  { name:'TRIANGLE', closed:true,
+  { name:'SQUARE',   closed:true,  // 2
+    rim(cx,cy,r){ return edges(cx,cy,r,[[-0.78,-0.78],[0.78,-0.78],[0.78,0.78],[-0.78,0.78]],4,true); }
+  },
+  { name:'PLUS',     closed:true,  // 3
+    rim(cx,cy,r){
+      const w=0.4;
+      return edges(cx,cy,r,[[-w,-1],[w,-1],[w,-w],[1,-w],[1,w],[w,w],[w,1],[-w,1],[-w,w],[-1,w],[-1,-w],[-w,-w]],1,true);
+    }
+  },
+  { name:'BOW-TIE',  closed:true,  // 4 (hourglass — pinched waist)
+    rim(cx,cy,r){ return edges(cx,cy,r,[[-1,-0.72],[1,-0.72],[0.16,0],[1,0.72],[-1,0.72],[-0.16,0]],3,true); }
+  },
+  { name:'CROSS',    closed:true,  // 5 (stylized diagonal X-cross)
+    rim(cx,cy,r){
+      const w=0.4;
+      const base=[[-w,-1],[w,-1],[w,-w],[1,-w],[1,w],[w,w],[w,1],[-w,1],[-w,w],[-1,w],[-1,-w],[-w,-w]];
+      const c=Math.cos(Math.PI/4), s=Math.sin(Math.PI/4);
+      const rot=base.map(([x,y])=>[(x*c-y*s)*0.86,(x*s+y*c)*0.86]);
+      return edges(cx,cy,r,rot,1,true);
+    }
+  },
+  { name:'TRIANGLE', closed:true,  // 6
     rim(cx,cy,r){
       const P=[], S=3, seg=5;
       for(let s=0;s<S;s++){
@@ -62,7 +101,10 @@ const SHAPES = [
       return P;
     }
   },
-  { name:'V-SHAPE',  closed:false,
+  { name:'CLOVER',   closed:true,  // 7
+    rim(cx,cy,r){ return arr(16, i=>{ const a=ang(i,16,-Math.PI/2); const rr=r*(0.62+0.38*Math.cos(4*a)); return pt(cx+Math.cos(a)*rr, cy+Math.sin(a)*rr); }); }
+  },
+  { name:'V',        closed:false, // 8
     rim(cx,cy,r){
       return arr(9, i=>{
         const t=i/8;
@@ -71,23 +113,12 @@ const SHAPES = [
       });
     }
   },
-  { name:'SQUARE',   closed:true,
+  { name:'STEPS',    closed:false, // 9 (staircase)
     rim(cx,cy,r){
-      const P=[], S=4, seg=4;
-      for(let s=0;s<S;s++){
-        const p1=pt(cx+Math.cos(ang(s,S,-Math.PI/4))*r, cy+Math.sin(ang(s,S,-Math.PI/4))*r);
-        const p2=pt(cx+Math.cos(ang(s+1,S,-Math.PI/4))*r, cy+Math.sin(ang(s+1,S,-Math.PI/4))*r);
-        for(let j=0;j<seg;j++) P.push(lerp2(p1,p2,j/seg));
-      }
-      return P;
+      return edges(cx,cy,r,[[-0.9,-0.75],[-0.54,-0.75],[-0.54,-0.4],[-0.18,-0.4],[-0.18,-0.05],[0.18,-0.05],[0.18,0.3],[0.54,0.3],[0.54,0.65],[0.9,0.65]],1,false);
     }
   },
-  { name:'ZIGZAG',   closed:false,
-    rim(cx,cy,r){
-      return arr(11, i=>pt( cx+(i/10-0.5)*1.9*r, cy+(i%2===0?-0.42:0.42)*r ));
-    }
-  },
-  { name:'U-SHAPE',  closed:false,
+  { name:'U',        closed:false, // 10
     rim(cx,cy,r){
       return arr(9, i=>{
         const t=i/8;
@@ -97,40 +128,50 @@ const SHAPES = [
       });
     }
   },
-  { name:'STAR',     closed:true,
-    rim(cx,cy,r){ return arr(16, i=>{ const rr=i%2===0?r:r*0.48; return pt(cx+Math.cos(ang(i,16,-Math.PI/2))*rr, cy+Math.sin(ang(i,16,-Math.PI/2))*rr); }); }
+  { name:'FLAT',     closed:false, // 11 (straight line)
+    rim(cx,cy,r){ return arr(16, i=>pt(cx+(i/15-0.5)*1.9*r, cy)); }
   },
-  { name:'CROSS',    closed:true,
+  { name:'HEART',    closed:true,  // 12
     rim(cx,cy,r){
-      const w=r*0.33;
-      return [pt(cx-w,cy-r),pt(cx+w,cy-r),pt(cx+w,cy-w),pt(cx+r,cy-w),pt(cx+r,cy+w),pt(cx+w,cy+w),pt(cx+w,cy+r),pt(cx-w,cy+r),pt(cx-w,cy+w),pt(cx-r,cy+w),pt(cx-r,cy-w),pt(cx-w,cy-w)];
+      return arr(16, i=>{
+        const t=ang(i,16,-Math.PI/2);
+        const x=16*Math.pow(Math.sin(t),3);
+        const y=-(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t));
+        return pt(cx+(x/17)*r, cy+(-y/17)*r*0.9 - r*0.05);
+      });
     }
   },
-  { name:'CLOVER',   closed:true,
-    rim(cx,cy,r){ return arr(16, i=>{ const a=ang(i,16,-Math.PI/2); const rr=r*(0.62+0.38*Math.cos(4*a)); return pt(cx+Math.cos(a)*rr, cy+Math.sin(a)*rr); }); }
+  { name:'STAR',     closed:true,  // 13
+    rim(cx,cy,r){ return arr(16, i=>{ const rr=i%2===0?r:r*0.48; return pt(cx+Math.cos(ang(i,16,-Math.PI/2))*rr, cy+Math.sin(ang(i,16,-Math.PI/2))*rr); }); }
+  },
+  { name:'W',        closed:false, // 14
+    rim(cx,cy,r){ return edges(cx,cy,r,[[-1,-0.62],[-0.5,0.62],[0,-0.62],[0.5,0.62],[1,-0.62]],3,false); }
+  },
+  { name:'FAN',      closed:false, // 15 (wide arc)
+    rim(cx,cy,r){
+      return arr(13, i=>{ const a=Math.PI*(1.12 + (i/12)*0.76); return pt(cx+Math.cos(a)*r, cy+Math.sin(a)*r*0.9 + r*0.15); });
+    }
+  },
+  { name:'INFINITY', closed:true,  // 16 (lemniscate / figure-8)
+    rim(cx,cy,r){
+      return arr(16, i=>{
+        const t=ang(i,16,0);
+        const d=1+Math.sin(t)*Math.sin(t);
+        return pt(cx+(Math.cos(t)/d)*r, cy+(Math.sin(t)*Math.cos(t)/d)*r*1.6);
+      });
+    }
   },
 ];
 
-const LEVEL_DEFS = [
-  {s:0, c:'#00FF00', o:false}, // 1  Circle     green
-  {s:2, c:'#FFFF00', o:true }, // 2  V-Shape    yellow (open)
-  {s:3, c:'#0066FF', o:false}, // 3  Square     blue
-  {s:4, c:'#FF8800', o:true }, // 4  Zigzag     orange (open)
-  {s:0, c:'#FF2200', o:false}, // 5  Circle     red
-  {s:6, c:'#FF44FF', o:false}, // 6  Star       magenta
-  {s:5, c:'#00FFCC', o:true }, // 7  U-Shape    cyan (open)
-  {s:7, c:'#FFAA00', o:false}, // 8  Cross      amber
-  {s:1, c:'#AAFFAA', o:false}, // 9  Triangle   lt-green
-  {s:0, c:'#AA00FF', o:false}, // 10 Circle     purple
-  {s:4, c:'#00FFFF', o:true }, // 11 Zigzag     cyan (open)
-  {s:3, c:'#FF44FF', o:false}, // 12 Square     magenta
-  {s:2, c:'#FF8888', o:true }, // 13 V-Shape    pink (open)
-  {s:6, c:'#FF2222', o:false}, // 14 Star       red
-  {s:8, c:'#FFFF44', o:false}, // 15 Clover     yellow
-  {s:7, c:'#FF2200', o:false}, // 16 Cross      red
-];
+// Authentic color cycle: blue (1-16), red (17-32), yellow (33-48),
+// cyan (49-64), white/"invisible" (65-80), green (81-96), then repeats.
+const TIER_COLORS = ['#3366FF','#FF2222','#FFDD00','#00DDDD','#DDDDDD','#22FF44'];
 
-function getLevelDef(lv) { return LEVEL_DEFS[(lv-1) % LEVEL_DEFS.length]; }
+function getLevelDef(lv) {
+  const s   = (lv-1) % SHAPES.length;
+  const tier= Math.floor((lv-1) / SHAPES.length) % TIER_COLORS.length;
+  return { s, c: TIER_COLORS[tier], o: SHAPES[s].closed===false };
+}
 
 function pt(x,y){ return {x,y}; }
 function arr(n,f){ return Array.from({length:n},(_,i)=>f(i)); }
@@ -213,7 +254,7 @@ function setWarpIntensity(v) {
   warp.osc.frequency.setTargetAtTime(90+v*180,   t, 0.06);
   warp.lfo.frequency.setTargetAtTime(3+v*18,      t, 0.06);
   warp.lfoG.gain.setTargetAtTime(20+v*90,         t, 0.06);
-  warp.vca.gain.setTargetAtTime(v*0.22,            t, 0.06);
+  warp.vca.gain.setTargetAtTime(v*0.07,            t, 0.06); // quiet ambient, not a constant drone
 }
 
 function tone(freq, type, dur, gain, freqEnd) {
@@ -294,6 +335,7 @@ function newGame() {
 
     zapper:    { uses:2 },
     invinc:    0,
+    paused:    false,
     spawnT:    0, spawnInt:2.4, waveLeft:0,
     cleared:   false,
     enemyMoveT:0,
@@ -362,12 +404,14 @@ function updateEnemies(dt) {
   const n=G.geo.n;
   if (G.waveLeft>0){ G.spawnT-=dt; if(G.spawnT<=0){ G.spawnT=G.spawnInt; spawnEnemy(pickType()); G.waveLeft--; } }
 
-  // Throttle warp audio: only update when threat changes meaningfully
+  // Warp hum: silent unless an enemy is actually near the rim (outer
+  // ~40% of the tube) or crawling the rim. No constant drone.
   let closestD=1.0, rimCount=0;
   G.enemies.forEach(e=>{ if(e.depth<closestD)closestD=e.depth; if(e.state==='rim')rimCount++; });
-  const threatBase = G.enemies.length>0 ? (1-closestD) : 0;
-  const threat = Math.min(1, threatBase + rimCount*0.2);
-  if (Math.abs(threat - G.warpInt) > 0.04) {
+  let threat = 0;
+  if (closestD < 0.4) threat = (0.4 - closestD) / 0.4;        // ramps up only in outer 40%
+  threat = Math.min(1, threat + rimCount*0.25);                // rim-crawlers add urgency
+  if (Math.abs(threat - G.warpInt) > 0.03) {
     G.warpInt = threat;
     setWarpIntensity(threat);
   }
@@ -959,6 +1003,8 @@ function drawHUD(col) {
   mainCtx.fillStyle=G.zapper.uses>0?'#FFAA00':'#443300';
   mainCtx.textAlign='left'; mainCtx.textBaseline='bottom';
   mainCtx.fillText(`[Z] ZAPPER ×${G.zapper.uses}`,18,H-14);
+  mainCtx.fillStyle='#888888'; mainCtx.textAlign='right';
+  mainCtx.fillText('[P] PAUSE',W-18,H-14);
 
   mainCtx.restore();
 }
@@ -992,7 +1038,7 @@ function drawAttractScreen() {
   mainCtx.fillText('INSERT COIN  ·  PRESS SPACE',CX,CY+sz*0.03);
   mainCtx.font=`${sz*0.024}px monospace`;
   mainCtx.fillStyle='#AAAAAA';
-  mainCtx.fillText('← → MOVE   SPACE FIRE   Z SUPER-ZAPPER',CX,CY+sz*0.10);
+  mainCtx.fillText('← → MOVE   SPACE FIRE   Z ZAPPER   P PAUSE',CX,CY+sz*0.10);
   mainCtx.restore();
 }
 
@@ -1098,6 +1144,29 @@ function loop(ts) {
       break;
 
     case GS.PLAYING: {
+      // Pause toggle (P) — freeze all updates, silence the hum, show overlay
+      if(JP['KeyP']){ G.paused=!G.paused; if(G.paused){ setWarpIntensity(0); G.warpInt=0; } }
+      if(G.paused){
+        const colp=getLevelDef(G.level).c;
+        beginGeo();
+        drawWeb(G.geo,colp);
+        drawSpikes(G.geo,G.spikes);
+        drawEnemies(G.geo,G.enemies,colp);
+        if(G.player&&G.player.visible&&!G.player.dead) drawClaw(G.geo,G.player.lane,0,'#FFFFFF');
+        endGeo();
+        drawHUD(colp);
+        mainCtx.save();
+        mainCtx.textAlign='center'; mainCtx.textBaseline='middle';
+        mainCtx.font=`bold ${Math.min(W,H)*0.07}px monospace`;
+        mainCtx.fillStyle='#FFFFFF';
+        mainCtx.fillText('PAUSED',CX,CY-Math.min(W,H)*0.02);
+        mainCtx.font=`${Math.min(W,H)*0.026}px monospace`;
+        mainCtx.fillStyle='#AAAAAA';
+        mainCtx.fillText('PRESS P TO RESUME',CX,CY+Math.min(W,H)*0.05);
+        mainCtx.restore();
+        break;
+      }
+
       handleInput(dt);
       if(G.invinc>0){
         G.invinc-=dt; G.player.blinkT-=dt;
