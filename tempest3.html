@@ -1011,9 +1011,9 @@ function drawHUD(col) {
 
 function drawAttractScreen() {
   const t=G.now*0.001;
-  const defIdx=Math.floor(t*0.3)%LEVEL_DEFS.length;
-  const spinGeo=buildGeo(LEVEL_DEFS[defIdx],CX,CY,RAD*0.88);
-  const spinCol=LEVEL_DEFS[defIdx].c;
+  const def=getLevelDef(Math.floor(t*0.3)%SHAPES.length + 1);
+  const spinGeo=buildGeo(def,CX,CY,RAD*0.88);
+  const spinCol=def.c;
 
   // Web goes to offscreen (gets bloom)
   beginGeo();
