@@ -693,8 +693,10 @@ function drawWeb(geo, col, scaleFrom1) {
 // Player claw — exact GUNPIC geometry from the Atari ROM (ALVROM.MAC).
 // Two prongs, pinched at the rim, splaying out + into the tube to wide
 // tips. t = across the rim (±1 = lane half-width), d = inward (0=rim,1=tip).
-const CLAW_L = [[0,0],[-0.2,0],[-0.4,0.4],[-0.8,0.4],[-1.0,1.0]];
-const CLAW_R = [[1.0,1.0],[0.8,0.4],[0.4,0.4],[0.2,0],[0,0]];
+// Player claw — exact LIFE1 icon picture from the ROM (ALVROM.MAC):
+// a crown/bat with two side points and a central U-notch. (t = across the
+// lane, d = into the tube; the notch faces inward.)
+const CLAW = [[0.0,0.0],[1.0,0.667],[0.25,1.0],[0.75,0.667],[0.0,0.333],[-0.75,0.667],[-0.25,1.0],[-1.0,0.667],[0.0,0.0]];
 // All enemy sprite geometry below is transcribed verbatim from the
 // original Atari ROM vector tables (ALVROM.MAC), normalized to a unit box.
 // flipper/spiker/fuse each have 4 animation frames; tanker is static.
@@ -733,14 +735,17 @@ function drawClaw(geo, lane, depth, col) {
   const il=Math.sqrt(ix*ix+iy*iy)||1;
   const nx=ix/il, ny=iy/il;                 // inward normal (toward center)
 
-  const P=(t,d)=>({x: mid.x + tx*t*halfW + nx*d*dLen, y: mid.y + ty*t*halfW + ny*d*dLen});
+  // Movement lean: tilt the claw toward the last move direction, decaying.
+  const lean = (G.player && G.player.leanT>0) ? (G.player.leanDir||0)*(G.player.leanT/0.16)*0.45 : 0;
+  const ca=Math.cos(lean), sa=Math.sin(lean);
+  const P=(t,d)=>{
+    const tt = t*ca - d*sa, dd = t*sa + d*ca;   // tilt in the (across, inward) plane
+    return {x: mid.x + tx*tt*halfW + nx*dd*dLen, y: mid.y + ty*tt*halfW + ny*dd*dLen};
+  };
   ctx.save();
   ctx.strokeStyle=col; ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round';
   ctx.beginPath();
-  CLAW_L.forEach((p,i)=>{ const q=P(p[0],p[1]); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
-  ctx.stroke();
-  ctx.beginPath();
-  CLAW_R.forEach((p,i)=>{ const q=P(p[0],p[1]); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
+  CLAW.forEach((p,i)=>{ const q=P(p[0],p[1]); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
   ctx.stroke();
   ctx.restore();
 }
@@ -1096,16 +1101,17 @@ function handleInput(dt) {
   if(G.state!==GS.PLAYING) return;
   if(!G.player||G.player.dead) return;
 
-  // Instant first press via JP[], fast repeat via KEYS + cooldown
+  // Instant first press via JP[], fast repeat via KEYS + cooldown.
+  // leanDir/leanT drive the claw's tilt-toward-movement animation.
   if(JP['ArrowLeft']||JP['KeyA']){
-    G.player.lane=stepLane(G.geo,G.player.lane,-1); moveCool=0.08;
+    G.player.lane=stepLane(G.geo,G.player.lane,-1); moveCool=0.08; G.player.leanDir=-1; G.player.leanT=0.16;
   } else if((KEYS['ArrowLeft']||KEYS['KeyA'])&&moveCool<=0){
-    G.player.lane=stepLane(G.geo,G.player.lane,-1); moveCool=0.08;
+    G.player.lane=stepLane(G.geo,G.player.lane,-1); moveCool=0.08; G.player.leanDir=-1; G.player.leanT=0.16;
   }
   if(JP['ArrowRight']||JP['KeyD']){
-    G.player.lane=stepLane(G.geo,G.player.lane,1); moveCool=0.08;
+    G.player.lane=stepLane(G.geo,G.player.lane,1); moveCool=0.08; G.player.leanDir=1; G.player.leanT=0.16;
   } else if((KEYS['ArrowRight']||KEYS['KeyD'])&&moveCool<=0){
-    G.player.lane=stepLane(G.geo,G.player.lane,1); moveCool=0.08;
+    G.player.lane=stepLane(G.geo,G.player.lane,1); moveCool=0.08; G.player.leanDir=1; G.player.leanT=0.16;
   }
 
   // Fire: faster rate + faster bullets
@@ -1162,6 +1168,7 @@ function loop(ts) {
       }
 
       handleInput(dt);
+      if(G.player&&G.player.leanT>0) G.player.leanT=Math.max(0,G.player.leanT-dt);
       if(G.invinc>0){
         G.invinc-=dt; G.player.blinkT-=dt;
         G.player.visible=Math.floor(G.player.blinkT*9)%2===0;
