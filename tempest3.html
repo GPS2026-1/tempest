@@ -36,7 +36,7 @@ function resize() {
   W = canvas.width  = window.innerWidth;
   H = canvas.height = window.innerHeight;
   CX = W/2; CY = H/2;
-  RAD = Math.min(W,H) * 0.40;
+  RAD = Math.min(W,H) * 0.46;   // near rim ~fills the screen
   if (!offCanvas) { offCanvas = document.createElement('canvas'); offCtx = offCanvas.getContext('2d'); }
   offCanvas.width = W; offCanvas.height = H;
   if (G && G.state !== GS.ATTRACT) rebuildGeo();
@@ -93,12 +93,19 @@ function rebuildGeo() {
   G.laneGlow = new Array(G.geo.n).fill(0);
 }
 
+// Real-tube perspective: depth 0 = near rim (player, full size), depth 1 =
+// far rim (the small opening at FAR scale). Hyperbolic so objects bunch up
+// toward the far end the way they do looking down the arcade tube.
+const FAR = 0.13;
+function perspScale(d){ return 1/(1 + d*(1/FAR - 1)); }   // 1 at near -> FAR at far
+
 function lanePt(geo, lane, depth) {
   const l = geo.lanes[((lane % geo.n)+geo.n) % geo.n];
-  return lerp2(l.mid, geo.center, depth);
+  const s = perspScale(depth), c = geo.center;
+  return pt(c.x + (l.mid.x-c.x)*s, c.y + (l.mid.y-c.y)*s);
 }
 
-function depthScale(d) { return Math.max(0.05, 1 - d*0.92); }
+function depthScale(d) { return perspScale(d); }
 
 function stepLane(geo, lane, dir) {
   const n = geo.n;
@@ -653,24 +660,28 @@ function drawWeb(geo, col, scaleFrom1) {
 
   ctx.lineCap='round'; ctx.strokeStyle=col;
 
-  // Normal spokes — all batched into a single path
+  // Far rim = the near rim scaled toward the vanishing point (the small
+  // opening at the bottom of the tube). Spokes connect near->far.
+  const fp = rp.map(p=>pt(cx+(p.x-cx)*FAR, cy+(p.y-cy)*FAR));
+
+  // Normal spokes (near rim point -> far rim point) — single batched path
   ctx.beginPath(); ctx.lineWidth=1.5*lw;
   for(let i=0;i<n;i++){
-    if(!(G.laneGlow[i]>0.05)){ ctx.moveTo(rp[i].x,rp[i].y); ctx.lineTo(cx,cy); }
+    if(!(G.laneGlow[i]>0.05)){ ctx.moveTo(rp[i].x,rp[i].y); ctx.lineTo(fp[i].x,fp[i].y); }
   }
   ctx.stroke();
 
-  // Glowing spokes — individual (need wider lineWidth + white)
+  // Glowing spokes — individual (wider + white)
   for(let i=0;i<n;i++){
     const gv=G.laneGlow[i]||0;
     if(gv>0.05){
       ctx.beginPath(); ctx.lineWidth=(1.5+gv*2.5)*lw; ctx.strokeStyle='#FFFFFF';
-      ctx.moveTo(rp[i].x,rp[i].y); ctx.lineTo(cx,cy); ctx.stroke();
+      ctx.moveTo(rp[i].x,rp[i].y); ctx.lineTo(fp[i].x,fp[i].y); ctx.stroke();
       ctx.strokeStyle=col;
     }
   }
 
-  // Rim segments — batched into single path
+  // Near rim segments
   ctx.beginPath(); ctx.lineWidth=2.0*lw; ctx.strokeStyle=col;
   for(let i=0;i<n;i++){
     const j=(i+1)%n;
@@ -679,7 +690,16 @@ function drawWeb(geo, col, scaleFrom1) {
   }
   ctx.stroke();
 
-  // Player lane highlight
+  // Far rim polygon (the small opening) — dimmer
+  ctx.globalAlpha=0.7; ctx.beginPath(); ctx.lineWidth=1.3*lw;
+  for(let i=0;i<n;i++){
+    const j=(i+1)%n;
+    if(!geo.closed&&j===0) continue;
+    ctx.moveTo(fp[i].x,fp[i].y); ctx.lineTo(fp[j].x,fp[j].y);
+  }
+  ctx.stroke(); ctx.globalAlpha=1;
+
+  // Player lane highlight (near rim segment)
   if(G.player&&!G.player.dead){
     const l=geo.lanes[G.player.lane];
     ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=3.0*lw;
@@ -687,10 +707,11 @@ function drawWeb(geo, col, scaleFrom1) {
     ctx.strokeStyle=col;
   }
 
-  // Inner rings — 5 rings, higher alpha for stronger depth cue
-  for(const t of INNER_T){
-    const ipts=rp.map(p=>lerp2(p,geo.center,t));
-    ctx.globalAlpha=0.45; ctx.lineWidth=0.9*lw;
+  // A couple of intermediate depth rings (perspective-spaced) for depth cue
+  for(const d of [0.4, 0.7]){
+    const s=perspScale(d);
+    const ipts=rp.map(p=>pt(cx+(p.x-cx)*s, cy+(p.y-cy)*s));
+    ctx.globalAlpha=0.28; ctx.lineWidth=0.8*lw;
     ctx.beginPath(); ctx.moveTo(ipts[0].x,ipts[0].y);
     for(let i=1;i<n;i++) ctx.lineTo(ipts[i].x,ipts[i].y);
     if(geo.closed) ctx.closePath();
