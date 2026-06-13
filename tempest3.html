@@ -470,7 +470,7 @@ function updateEnemies(dt) {
         const dir=Math.random()<0.5?-1:1;
         const newLane=stepLane(G.geo,e.lane,dir);
         if (newLane!==e.lane) {
-          e.flipFrom=e.lane; e.flipTo=newLane; e.flipping=true; e.flipProgress=0;
+          e.flipFrom=e.lane; e.flipTo=newLane; e.flipDir=dir; e.flipping=true; e.flipProgress=0;
           SFX.flipperFlip();
         }
       }
@@ -841,11 +841,25 @@ function drawEnemies(geo, enemies, webCol) {
     let   px, py;
 
     if(e.type===ET.FLIPPER && e.flipping){
-      const t  = smoothstep(e.flipProgress);
-      const pA = lanePt(geo, e.flipFrom, depth);
-      const pB = lanePt(geo, e.flipTo,   depth);
-      px = lerpS(pA.x, pB.x, t);
-      py = lerpS(pA.y, pB.y, t);
+      // Authentic cartwheel: rotate the body 180° about the shared rim
+      // corner between the two lanes, so it tumbles end-over-end.
+      const t     = smoothstep(e.flipProgress);
+      const dir   = e.flipDir || 1;
+      const shared= dir>0 ? (e.flipFrom+1)%geo.n : ((e.flipFrom%geo.n)+geo.n)%geo.n;
+      const pivot = lerp2(geo.rimPts[shared], geo.center, depth);
+      const base  = lanePt(geo, e.flipFrom, depth);
+      const ang   = dir * Math.PI * t;
+      const ca=Math.cos(ang), sa=Math.sin(ang);
+      const ox=base.x-pivot.x, oy=base.y-pivot.y;
+      px = pivot.x + ox*ca - oy*sa;
+      py = pivot.y + ox*sa + oy*ca;
+      // 180° about the corner lands ~exactly on the next lane for a
+      // circle, but curved webs leave a small gap — correct it to the
+      // true destination, ramped by t so there's no visible snap.
+      const tgt = lanePt(geo, e.flipTo, depth);
+      const endX = 2*pivot.x - base.x, endY = 2*pivot.y - base.y;
+      px += (tgt.x - endX) * t;
+      py += (tgt.y - endY) * t;
     } else {
       const p = lanePt(geo, e.lane, depth);
       px=p.x; py=p.y;
@@ -857,16 +871,26 @@ function drawEnemies(geo, enemies, webCol) {
 
     switch(e.type){
       case ET.FLIPPER: {
-        const squash = e.flipping ? Math.max(0.08, Math.abs(Math.cos(Math.PI * e.flipProgress))) : 1;
-        ctx.scale(squash, 1);
-        ctx.lineWidth=1.8;
+        // Orient to the lane (radial) and add the tumble rotation so the
+        // bowtie cartwheels as it flips. Authentic Tempest flipper = an
+        // open angular bowtie (two V's meeting tip-to-tip).
+        const cx=geo.center.x, cy=geo.center.y;
+        const fb = e.flipping ? lanePt(geo,e.flipFrom,depth) : {x:px,y:py};
+        const baseAng = Math.atan2(fb.y-cy, fb.x-cx);
+        const tumble  = e.flipping ? (e.flipDir||1)*Math.PI*smoothstep(e.flipProgress) : 0;
+        ctx.rotate(baseAng + Math.PI/2 + tumble);
+        const w=sz*1.35, h=sz*1.05;
+        ctx.lineWidth=2.0;
         ctx.beginPath();
-        ctx.moveTo(0, -sz*1.4); ctx.lineTo( sz*1.1, 0);
-        ctx.lineTo(0,  sz*1.4); ctx.lineTo(-sz*1.1, 0);
-        ctx.closePath(); ctx.stroke();
-        ctx.lineWidth=1.2;
-        ctx.beginPath(); ctx.moveTo(0,-sz*1.4); ctx.lineTo(0,sz*1.4); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(-sz*1.1,0); ctx.lineTo(sz*1.1,0); ctx.stroke();
+        ctx.moveTo(-w,-h); ctx.lineTo(0,0); ctx.lineTo(-w, h);  // left wing
+        ctx.moveTo( w,-h); ctx.lineTo(0,0); ctx.lineTo( w, h);  // right wing
+        ctx.stroke();
+        // short outer edges cap the wings (the classic flipper silhouette)
+        ctx.lineWidth=1.5;
+        ctx.beginPath(); ctx.moveTo(-w,-h); ctx.lineTo(-w*0.62,-h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-w, h); ctx.lineTo(-w*0.62, h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo( w,-h); ctx.lineTo( w*0.62,-h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo( w, h); ctx.lineTo( w*0.62, h); ctx.stroke();
         break;
       }
       case ET.TANKER: {
@@ -1152,7 +1176,7 @@ function loop(ts) {
         drawWeb(G.geo,colp);
         drawSpikes(G.geo,G.spikes);
         drawEnemies(G.geo,G.enemies,colp);
-        if(G.player&&G.player.visible&&!G.player.dead) drawClaw(G.geo,G.player.lane,0,'#FFFFFF');
+        if(G.player&&G.player.visible&&!G.player.dead) drawClaw(G.geo,G.player.lane,0,'#FFFF00');
         endGeo();
         drawHUD(colp);
         mainCtx.save();
@@ -1198,7 +1222,7 @@ function loop(ts) {
       drawEnemies(G.geo,G.enemies,col);
       drawEBullets(G.geo,G.eBullets);
       drawBullets(G.geo,G.bullets);
-      if(G.player&&G.player.visible&&!G.player.dead) drawClaw(G.geo,G.player.lane,0,'#FFFFFF');
+      if(G.player&&G.player.visible&&!G.player.dead) drawClaw(G.geo,G.player.lane,0,'#FFFF00');
       drawExplosions(); drawScorePopups();
       if(G.shake.t>0) ctx.restore();
       endGeo();
