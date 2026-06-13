@@ -802,13 +802,6 @@ function drawWeb(geo, col, scaleFrom1) {
 // tips. t = across the rim (±1 = lane half-width), d = inward (0=rim,1=tip).
 const CLAW_L = [[0,0],[-0.2,0],[-0.4,0.4],[-0.8,0.4],[-1.0,1.0]];
 const CLAW_R = [[1.0,1.0],[0.8,0.4],[0.4,0.4],[0.2,0],[0,0]];
-// Exact ENER11 flipper outline (Atari ROM), normalized & recentered.
-const FLIPPER_PTS = [
-  [0.66,0.29],[0.59,1.0],[-0.13,0.49],[-0.41,0.44],[-0.74,0.22],[-0.84,0.17],
-  [-0.89,-0.05],[-0.95,0.05],[-1.0,0.27],[-1.0,-0.27],[-0.95,-0.05],[-0.89,0.05],
-  [-0.84,-0.17],[-0.74,-0.22],[-0.41,-0.44],[-0.13,-0.49],[0.59,-1.0],[0.66,-0.29],
-  [0.93,-0.22],[1.0,-0.12]
-];
 function drawClaw(geo, lane, depth, col) {
   const l   = geo.lanes[lane];
   const mid = depth===0 ? l.mid : lanePt(geo,lane,depth);
@@ -939,12 +932,13 @@ function drawEnemies(geo, enemies, webCol) {
         const baseAng = Math.atan2(fb.y-cy, fb.x-cx);
         const tumble  = e.flipping ? (e.flipDir||1)*Math.PI*smoothstep(e.flipProgress) : 0;
         ctx.rotate(baseAng + Math.PI/2 + tumble);
-        // Exact ENER11 flipper outline from the ROM — a symmetric
-        // butterfly. ROM x' maps to the radial axis, y' across the lane.
-        const s=sz*1.3;
-        ctx.lineWidth=1.9;
+        // Bowtie / butterfly: two triangles meeting at a pinched center,
+        // four points spanning across the lane — the on-screen flipper.
+        const w=sz*1.45, h=sz*1.0;
+        ctx.lineWidth=2.0;
         ctx.beginPath();
-        FLIPPER_PTS.forEach((p,i)=>{ const X=p[1]*s, Y=p[0]*s; i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
+        ctx.moveTo(-w,-h); ctx.lineTo(0,0); ctx.lineTo(-w, h); ctx.closePath(); // left wing
+        ctx.moveTo( w,-h); ctx.lineTo(0,0); ctx.lineTo( w, h); ctx.closePath(); // right wing
         ctx.stroke();
         break;
       }
