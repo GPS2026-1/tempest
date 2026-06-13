@@ -47,130 +47,21 @@ window.addEventListener('resize', resize);
 // SECTION 2 — WEB GEOMETRY
 // ============================================================
 
-// Authentic Tempest 16-shape cycle, in the original arcade order:
-// Circle, Square, Plus, Bow-tie, Cross, Triangle, Clover, V, Steps,
-// U, Flat, Heart, Star, W, Fan, Infinity. The geometry repeats every
-// 16 levels; only the color changes each pass.
-//
-// `edges` traces a normalized vertex list (coords in -1..1) into rim
-// points, subdividing each edge into `per` segments.
-function edges(cx, cy, r, verts, per, closed) {
-  const P=[], m = closed ? verts.length : verts.length-1;
-  for(let s=0;s<m;s++){
-    const a=verts[s], b=verts[(s+1)%verts.length];
-    const pa=pt(cx+a[0]*r, cy+a[1]*r), pb=pt(cx+b[0]*r, cy+b[1]*r);
-    for(let j=0;j<per;j++) P.push(lerp2(pa,pb,j/per));
-  }
-  if(!closed){ const e=verts[verts.length-1]; P.push(pt(cx+e[0]*r, cy+e[1]*r)); }
-  return P;
-}
-
-const SHAPES = [
-  { name:'CIRCLE',   closed:true,  // 1
-    rim(cx,cy,r){ return arr(16, i=>{ const a=ang(i,16,-Math.PI/2); return pt(cx+Math.cos(a)*r, cy+Math.sin(a)*r); }); }
-  },
-  { name:'SQUARE',   closed:true,  // 2
-    rim(cx,cy,r){ return edges(cx,cy,r,[[-0.78,-0.78],[0.78,-0.78],[0.78,0.78],[-0.78,0.78]],4,true); }
-  },
-  { name:'PLUS',     closed:true,  // 3
-    rim(cx,cy,r){
-      const w=0.4;
-      return edges(cx,cy,r,[[-w,-1],[w,-1],[w,-w],[1,-w],[1,w],[w,w],[w,1],[-w,1],[-w,w],[-1,w],[-1,-w],[-w,-w]],1,true);
-    }
-  },
-  { name:'BOW-TIE',  closed:true,  // 4 (hourglass — pinched waist)
-    rim(cx,cy,r){ return edges(cx,cy,r,[[-1,-0.72],[1,-0.72],[0.16,0],[1,0.72],[-1,0.72],[-0.16,0]],3,true); }
-  },
-  { name:'CROSS',    closed:true,  // 5 (stylized diagonal X-cross)
-    rim(cx,cy,r){
-      const w=0.4;
-      const base=[[-w,-1],[w,-1],[w,-w],[1,-w],[1,w],[w,w],[w,1],[-w,1],[-w,w],[-1,w],[-1,-w],[-w,-w]];
-      const c=Math.cos(Math.PI/4), s=Math.sin(Math.PI/4);
-      const rot=base.map(([x,y])=>[(x*c-y*s)*0.86,(x*s+y*c)*0.86]);
-      return edges(cx,cy,r,rot,1,true);
-    }
-  },
-  { name:'TRIANGLE', closed:true,  // 6
-    rim(cx,cy,r){
-      const P=[], S=3, seg=5;
-      for(let s=0;s<S;s++){
-        const p1=pt(cx+Math.cos(ang(s,S,-Math.PI/2))*r, cy+Math.sin(ang(s,S,-Math.PI/2))*r);
-        const p2=pt(cx+Math.cos(ang(s+1,S,-Math.PI/2))*r, cy+Math.sin(ang(s+1,S,-Math.PI/2))*r);
-        for(let j=0;j<seg;j++) P.push(lerp2(p1,p2,j/seg));
-      }
-      return P;
-    }
-  },
-  { name:'CLOVER',   closed:true,  // 7
-    rim(cx,cy,r){ return arr(16, i=>{ const a=ang(i,16,-Math.PI/2); const rr=r*(0.62+0.38*Math.cos(4*a)); return pt(cx+Math.cos(a)*rr, cy+Math.sin(a)*rr); }); }
-  },
-  { name:'V',        closed:false, // 8
-    rim(cx,cy,r){
-      return arr(9, i=>{
-        const t=i/8;
-        if(t<=0.5){ const u=t*2; return pt(cx+r*(-0.88+0.88*u), cy+r*(-0.52+0.92*u)); }
-        else       { const u=(t-0.5)*2; return pt(cx+r*0.88*u,   cy+r*(0.40-0.92*u)); }
-      });
-    }
-  },
-  { name:'STEPS',    closed:false, // 9 (staircase)
-    rim(cx,cy,r){
-      return edges(cx,cy,r,[[-0.9,-0.75],[-0.54,-0.75],[-0.54,-0.4],[-0.18,-0.4],[-0.18,-0.05],[0.18,-0.05],[0.18,0.3],[0.54,0.3],[0.54,0.65],[0.9,0.65]],1,false);
-    }
-  },
-  { name:'U',        closed:false, // 10
-    rim(cx,cy,r){
-      return arr(9, i=>{
-        const t=i/8;
-        if(t<0.25)      { return pt(cx-r*0.85, cy+r*(-0.5+t*4*0.9));  }
-        else if(t<=0.75){ const u=(t-0.25)/0.5; return pt(cx+r*(-0.85+u*1.7), cy+r*0.4); }
-        else            { const u=(t-0.75)/0.25; return pt(cx+r*0.85, cy+r*(0.4-u*0.9)); }
-      });
-    }
-  },
-  { name:'FLAT',     closed:false, // 11 (straight line)
-    rim(cx,cy,r){ return arr(16, i=>pt(cx+(i/15-0.5)*1.9*r, cy)); }
-  },
-  { name:'HEART',    closed:true,  // 12
-    rim(cx,cy,r){
-      return arr(16, i=>{
-        const t=ang(i,16,-Math.PI/2);
-        const x=16*Math.pow(Math.sin(t),3);
-        const y=-(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t));
-        return pt(cx+(x/17)*r, cy+(-y/17)*r*0.9 - r*0.05);
-      });
-    }
-  },
-  { name:'STAR',     closed:true,  // 13
-    rim(cx,cy,r){ return arr(16, i=>{ const rr=i%2===0?r:r*0.48; return pt(cx+Math.cos(ang(i,16,-Math.PI/2))*rr, cy+Math.sin(ang(i,16,-Math.PI/2))*rr); }); }
-  },
-  { name:'W',        closed:false, // 14
-    rim(cx,cy,r){ return edges(cx,cy,r,[[-1,-0.62],[-0.5,0.62],[0,-0.62],[0.5,0.62],[1,-0.62]],3,false); }
-  },
-  { name:'FAN',      closed:false, // 15 (wide arc)
-    rim(cx,cy,r){
-      return arr(13, i=>{ const a=Math.PI*(1.12 + (i/12)*0.76); return pt(cx+Math.cos(a)*r, cy+Math.sin(a)*r*0.9 + r*0.15); });
-    }
-  },
-  { name:'INFINITY', closed:true,  // 16 (lemniscate / figure-8)
-    rim(cx,cy,r){
-      return arr(16, i=>{
-        const t=ang(i,16,0);
-        const d=1+Math.sin(t)*Math.sin(t);
-        return pt(cx+(Math.cos(t)/d)*r, cy+(Math.sin(t)*Math.cos(t)/d)*r*1.6);
-      });
-    }
-  },
-];
+// ---- Authentic well geometry, transcribed from the ROM (ALDISP.MAC) ----
+// 16 wells (NEWLIX/NEWLIZ rim coords, normalized to a unit box), the
+// planar(open)/closed flag (HOLRAP), and the per-wave level order (WELSEQ).
+// World Z is up, so screen Y is flipped when building geometry.
+const WELLS_ROM = {"wells":[[[1.0,0.0],[0.9196,0.375],[0.7054,0.7054],[0.375,0.9196],[0.0,1.0],[-0.375,0.9196],[-0.7054,0.7054],[-0.9196,0.375],[-1.0,0.0],[-0.9196,-0.375],[-0.7054,-0.7054],[-0.375,-0.9196],[0.0,-1.0],[0.375,-0.9196],[0.7054,-0.7054],[0.9196,-0.375]],[[1.0,0.0],[1.0,0.5],[1.0,1.0],[0.5,1.0],[0.0,1.0],[-0.5,1.0],[-1.0,1.0],[-1.0,0.5],[-1.0,0.0],[-1.0,-0.5],[-1.0,-1.0],[-0.5,-1.0],[0.0,-1.0],[0.5,-1.0],[1.0,-1.0],[1.0,-0.5]],[[1.0,0.0],[1.0,0.5],[0.5,0.5],[0.5,1.0],[0.0,1.0],[-0.5,1.0],[-0.5,0.5],[-1.0,0.5],[-1.0,0.0],[-1.0,-0.5],[-0.5,-0.5],[-0.5,-1.0],[0.0,-1.0],[0.5,-1.0],[0.5,-0.5],[1.0,-0.5]],[[0.9643,0.1786],[0.7589,0.4286],[0.4375,0.5],[0.1429,0.3482],[-0.1429,0.3482],[-0.4375,0.5],[-0.7589,0.4286],[-0.9643,0.1786],[-0.9643,-0.1786],[-0.7589,-0.4286],[-0.4375,-0.5],[-0.1429,-0.3482],[0.1429,-0.3482],[0.4375,-0.5],[0.7589,-0.4286],[0.9643,-0.1786]],[[1.0,0.1964],[0.5714,0.3125],[0.2857,0.6161],[0.1786,1.0],[-0.1786,1.0],[-0.2857,0.6161],[-0.5714,0.3125],[-1.0,0.1964],[-1.0,-0.1964],[-0.5714,-0.3125],[-0.2857,-0.6161],[-0.1786,-1.0],[0.1786,-1.0],[0.2857,-0.6161],[0.5714,-0.3125],[1.0,-0.1964]],[[0.7946,-0.5982],[0.5893,-0.1964],[0.3929,0.2054],[0.2054,0.6071],[0.0,1.0],[-0.2054,0.6071],[-0.4107,0.2054],[-0.6071,-0.1964],[-0.7946,-0.5982],[-1.0,-1.0],[-0.6696,-1.0],[-0.3393,-1.0],[0.0,-1.0],[0.3393,-1.0],[0.6607,-1.0],[1.0,-1.0]],[[0.9464,0.2857],[0.8571,0.8571],[0.25,0.9464],[0.0,0.4286],[-0.25,0.9464],[-0.8571,0.8571],[-0.9464,0.2857],[-0.4286,0.0],[-0.9464,-0.2857],[-0.8571,-0.8571],[-0.25,-0.9464],[0.0,-0.4286],[0.25,-0.9464],[0.8571,-0.8571],[0.9464,-0.2857],[0.4286,0.0]],[[-1.0,1.0],[-0.875,0.7143],[-0.75,0.4286],[-0.625,0.1429],[-0.5,-0.1429],[-0.375,-0.4286],[-0.25,-0.7143],[-0.1429,-1.0],[0.1429,-1.0],[0.2679,-0.7143],[0.3929,-0.4286],[0.5179,-0.1429],[0.6429,0.1429],[0.7679,0.4286],[0.8929,0.7143],[1.0,1.0]],[[-1.0,-0.5714],[-0.875,-0.5714],[-0.7411,-0.5714],[-0.6071,-0.5714],[-0.4732,-0.5714],[-0.3393,-0.5714],[-0.2054,-0.5714],[-0.0714,-0.5714],[0.0625,-0.5714],[0.1964,-0.5714],[0.3304,-0.5714],[0.4643,-0.5714],[0.5982,-0.5714],[0.7321,-0.5714],[0.8661,-0.5714],[1.0,-0.5714]],[[-1.0,1.0],[-1.0,0.6696],[-1.0,0.3393],[-1.0,0.0],[-0.9464,-0.3214],[-0.7768,-0.6339],[-0.5179,-0.8571],[-0.2054,-0.9821],[0.2054,-0.9821],[0.5179,-0.8571],[0.7768,-0.6339],[0.9464,-0.3214],[1.0,0.0],[1.0,0.3393],[1.0,0.6696],[1.0,1.0]],[[-1.0,0.5714],[-0.8214,0.3393],[-0.7143,0.0893],[-0.6607,-0.1964],[-0.5893,-0.4821],[-0.4911,-0.7232],[-0.3393,-0.9643],[-0.0982,-0.8214],[0.1786,-0.8571],[0.3214,-0.6339],[0.3929,-0.3482],[0.5179,-0.0982],[0.8036,-0.125],[0.875,0.1429],[0.9464,0.4286],[1.0,0.7143]],[[0.0,0.0],[-0.1429,-0.3661],[-0.5,-0.5],[-0.8571,-0.3661],[-1.0,0.0],[-0.8571,0.3661],[-0.5,0.5179],[-0.1429,0.3661],[0.0,0.0],[0.1429,-0.3661],[0.5,-0.5],[0.8571,-0.3661],[1.0,0.0],[0.8571,0.3661],[0.5,0.5179],[0.1429,0.3661]],[[0.8036,0.8929],[0.3214,0.9286],[0.0625,0.4911],[0.0,0.0],[-0.0625,0.4911],[-0.3214,0.9286],[-0.8036,0.8929],[-1.0,0.4464],[-1.0,-0.0536],[-0.8571,-0.5089],[-0.5,-0.8571],[0.0,-1.0],[0.5,-0.8571],[0.8571,-0.5089],[1.0,-0.0536],[1.0,0.4464]],[[-1.0,0.1429],[-1.0,-0.1429],[-0.7143,-0.1429],[-0.7143,-0.4286],[-0.4286,-0.4286],[-0.4286,-0.7143],[-0.1429,-0.7143],[-0.1429,-1.0],[0.1429,-1.0],[0.1429,-0.7143],[0.4286,-0.7143],[0.4286,-0.4286],[0.7143,-0.4286],[0.7143,-0.1429],[1.0,-0.1429],[1.0,0.1429]],[[0.4286,0.9107],[0.0,0.7143],[-0.4286,0.9107],[-0.5089,0.5089],[-0.9286,0.4107],[-0.7143,0.0],[-0.9286,-0.4107],[-0.5089,-0.5089],[-0.4286,-0.9643],[0.0,-0.7143],[0.4286,-0.9643],[0.5089,-0.5089],[0.9286,-0.4107],[0.75,0.0],[0.9286,0.4107],[0.5089,0.5089]],[[-1.0,-0.0179],[-0.875,-0.1964],[-0.8482,-0.4196],[-0.7857,-0.625],[-0.6071,-0.75],[-0.3839,-0.75],[-0.2321,-0.6429],[-0.1161,-0.4464],[0.1161,-0.4464],[0.2321,-0.6429],[0.3839,-0.75],[0.6071,-0.75],[0.7857,-0.625],[0.8482,-0.4196],[0.875,-0.1964],[1.0,-0.0179]]],"closed":[true,true,true,true,true,true,true,false,false,false,false,true,true,false,true,false],"seq":[0,1,2,3,4,5,6,7,13,9,8,12,14,15,10,11],"names":["CIRCLE","SQUARE","CROSS","PEANUT","4 KEY","TRIANGLE","CLOVER","V","PLANE","U","JAGGED","LYING 8","HEART","STAIRCASE","STAR","WAVE"]};
 
 // Authentic color cycle: blue (1-16), red (17-32), yellow (33-48),
 // cyan (49-64), white/"invisible" (65-80), green (81-96), then repeats.
 const TIER_COLORS = ['#3366FF','#FF2222','#FFDD00','#00DDDD','#DDDDDD','#22FF44'];
 
 function getLevelDef(lv) {
-  const s   = (lv-1) % SHAPES.length;
-  const tier= Math.floor((lv-1) / SHAPES.length) % TIER_COLORS.length;
-  return { s, c: TIER_COLORS[tier], o: SHAPES[s].closed===false };
+  const wellId = WELLS_ROM.seq[(lv-1) % 16];
+  const tier   = Math.floor((lv-1) / 16) % TIER_COLORS.length;
+  return { well: wellId, c: TIER_COLORS[tier],
+           closed: WELLS_ROM.closed[wellId], name: WELLS_ROM.names[wellId] };
 }
 
 function pt(x,y){ return {x,y}; }
@@ -183,15 +74,17 @@ function smoothstep(t){ return t*t*(3-2*t); }
 function dist2(a,b){ const dx=a.x-b.x,dy=a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
 
 function buildGeo(def, cx, cy, r) {
-  const shape  = SHAPES[def.s % SHAPES.length];
-  const rimPts = shape.rim(cx, cy, r);
-  const n      = rimPts.length;
+  const w = WELLS_ROM.wells[def.well];
+  const rimPts = w.map(p => pt(cx + p[0]*r, cy - p[1]*r));  // z up -> screen y down
+  const n = rimPts.length;
   const center = pt(cx, cy);
-  const lanes  = rimPts.map((rA,i)=>{
+  const lanes = rimPts.map((rA,i)=>{
     const rB = rimPts[(i+1) % n];
     return { rA, rB, mid: pt((rA.x+rB.x)/2,(rA.y+rB.y)/2) };
   });
-  return { lanes, rimPts, center, n, r, closed:def.o===false, def };
+  // open wells have one fewer lane (the opening between point n-1 and 0)
+  const nLanes = def.closed ? n : n-1;
+  return { lanes, rimPts, center, n, nLanes, r, closed: def.closed, def };
 }
 
 function rebuildGeo() {
@@ -210,7 +103,7 @@ function depthScale(d) { return Math.max(0.05, 1 - d*0.92); }
 function stepLane(geo, lane, dir) {
   const n = geo.n;
   if (geo.closed) return ((lane+dir)+n) % n;
-  return clamp(lane+dir, 0, n-1);
+  return clamp(lane+dir, 0, geo.nLanes-1);
 }
 
 function rightSpoke(lane, n) { return (lane+1) % n; }
@@ -371,7 +264,7 @@ function startLevel() {
 // ============================================================
 
 function spawnEnemy(type, lane) {
-  const n=G.geo.n;
+  const n=G.geo.nLanes;
   const l = lane!==undefined ? lane : Math.floor(Math.random()*n);
   const diff=Math.min(G.level,16);
   const baseSpd = 0.05 + diff*0.014;
@@ -1071,7 +964,7 @@ function drawHUD(col) {
   mainCtx.fillStyle='#FFDD66'; mainCtx.textAlign='right'; mainCtx.fillText(`HI  ${G.hi}`,W-18,12);
 
   mainCtx.font=`${sz*0.75}px monospace`;
-  mainCtx.fillStyle=col; mainCtx.textAlign='left'; mainCtx.fillText(`LV ${G.level}  ${SHAPES[getLevelDef(G.level).s].name}`,18,14+sz*1.1);
+  mainCtx.fillStyle=col; mainCtx.textAlign='left'; mainCtx.fillText(`LV ${G.level}  ${getLevelDef(G.level).name}`,18,14+sz*1.1);
 
   const ly=12+sz*0.25;
   for(let i=0;i<G.lives;i++){
@@ -1096,7 +989,7 @@ function drawHUD(col) {
 
 function drawAttractScreen() {
   const t=G.now*0.001;
-  const def=getLevelDef(Math.floor(t*0.3)%SHAPES.length + 1);
+  const def=getLevelDef(Math.floor(t*0.3)%16 + 1);
   const spinGeo=buildGeo(def,CX,CY,RAD*0.88);
   const spinCol=def.c;
 
@@ -1157,7 +1050,7 @@ function drawLevelTitleScreen() {
   mainCtx.fillText(`LEVEL  ${G.level}`,CX,CY-sz*0.04);
   mainCtx.font=`${sz*0.036}px monospace`;
   mainCtx.fillStyle='#AAAAAA';
-  mainCtx.fillText(SHAPES[def.s].name + (def.o===true ? '  [OPEN]' : ''),CX,CY+sz*0.04);
+  mainCtx.fillText(def.name + (def.closed ? '' : '  [OPEN]'),CX,CY+sz*0.04);
   mainCtx.restore();
 }
 
