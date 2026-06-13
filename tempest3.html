@@ -19,7 +19,7 @@ canvas { display:block; }
 // ============================================================
 
 const GS = { ATTRACT:0, PLAYING:1, DEAD_PAUSE:2, FLYTHROUGH:3, LEVEL_TITLE:4, GAME_OVER:5 };
-const ET = { FLIPPER:0, TANKER:1, SPIKER:2, FUSEBALL:3 };
+const ET = { FLIPPER:0, TANKER:1, SPIKER:2, FUSEBALL:3, PULSAR:4 };
 // 5 inner rings (was 3) for stronger depth cue
 const INNER_T = [0.18, 0.34, 0.5, 0.66, 0.82];
 
@@ -378,7 +378,7 @@ function spawnEnemy(type, lane) {
   const e = {
     type, lane:l, depth:0.98, hp: type===ET.TANKER?2:1,
     state: type===ET.FUSEBALL ? 'rim' : 'climbing',
-    speed: type===ET.TANKER?baseSpd*0.5 : type===ET.SPIKER?baseSpd*0.65 : baseSpd,
+    speed: type===ET.TANKER?baseSpd*0.5 : type===ET.SPIKER?baseSpd*0.65 : type===ET.PULSAR?baseSpd*0.8 : baseSpd,
     angle: 0,
     flipT:0, flipInt:0.5+Math.random()*0.5,
     flipProgress:0, flipFrom:l, flipTo:l, flipping:false,
@@ -386,6 +386,8 @@ function spawnEnemy(type, lane) {
     shootT: 1.0+Math.random()*2.0,
     fuseT:0, fuseInt:Math.max(0.06, 0.14-diff*0.005), fuseDir:Math.random()<0.5?-1:1,
     fuseDirT:0, fuseDirInt:0.5+Math.random()*1.0,
+    // pulsar: cycles between idle and "pulsing" (lane electrified, lethal)
+    pulseT:Math.random(), pulseInt:1.4, pulseOn:false,
     spikeBase:0.98,
     hitFlash:0, trail:[],
   };
@@ -395,9 +397,12 @@ function spawnEnemy(type, lane) {
 function pickType() {
   const lv=G.level, r=Math.random();
   if (lv<3)  return ET.FLIPPER;
-  if (lv<5)  return r<0.68?ET.FLIPPER:ET.TANKER;
-  if (lv<7)  return r<0.48?ET.FLIPPER:r<0.75?ET.TANKER:ET.SPIKER;
-  return r<0.36?ET.FLIPPER:r<0.55?ET.TANKER:r<0.76?ET.SPIKER:ET.FUSEBALL;
+  if (lv<4)  return r<0.7?ET.FLIPPER:ET.TANKER;
+  // Pulsars enter at the red tier (level 17+ authentically); here we
+  // introduce them from level 4 so they're seen, alongside spikers/fuseballs.
+  if (lv<6)  return r<0.5?ET.FLIPPER:r<0.72?ET.TANKER:ET.PULSAR;
+  if (lv<8)  return r<0.4?ET.FLIPPER:r<0.6?ET.TANKER:r<0.78?ET.PULSAR:ET.SPIKER;
+  return r<0.32?ET.FLIPPER:r<0.5?ET.TANKER:r<0.66?ET.PULSAR:r<0.83?ET.SPIKER:ET.FUSEBALL;
 }
 
 function updateEnemies(dt) {
@@ -482,6 +487,26 @@ function updateEnemies(dt) {
       if(e.shootT<=0){ e.shootT=1.2+Math.random()*2.0-G.level*0.04; if(e.depth<0.78){ G.eBullets.push({lane:e.lane,depth:e.depth-0.03,speed:0.5+G.level*0.025}); SFX.flipperShoot(); } }
     }
 
+    if (e.type===ET.PULSAR) {
+      // Pulse cycle: idle, then "on" for the latter part of the cycle.
+      // While on, the whole lane is electrified and lethal.
+      e.pulseT+=dt;
+      if (e.pulseT>=e.pulseInt) e.pulseT=0;
+      const wasOn=e.pulseOn;
+      e.pulseOn = e.pulseT > e.pulseInt*0.6;
+      if (e.pulseOn && !wasOn) SFX.flipperFlip();
+      if (e.pulseOn && G.player && !G.player.dead && G.invinc<=0 && e.lane===G.player.lane) { hitPlayer(); }
+      // pulsars also flip across lanes
+      e.flipT+=dt;
+      if (!e.flipping && !e.pulseOn && e.flipT>=e.flipInt) {
+        e.flipT=0; e.flipInt=0.6+Math.random()*0.7;
+        const dir=Math.random()<0.5?-1:1;
+        const newLane=stepLane(G.geo,e.lane,dir);
+        if (newLane!==e.lane){ e.flipFrom=e.lane; e.flipTo=newLane; e.flipDir=dir; e.flipping=true; e.flipProgress=0; }
+      }
+      if (e.flipping){ e.flipProgress+=dt*6; if(e.flipProgress>=1){ e.flipProgress=1; e.flipping=false; e.lane=e.flipTo; } }
+    }
+
     if (e.depth<=0) {
       e.depth=0;
       if (e.type===ET.SPIKER) {
@@ -492,7 +517,7 @@ function updateEnemies(dt) {
         if (G.player&&!G.player.dead&&G.invinc<=0&&e.lane===G.player.lane) hitPlayer();
         G.enemies.splice(i,1); continue;
       }
-      if (e.type===ET.FLIPPER) {
+      if (e.type===ET.FLIPPER || e.type===ET.PULSAR) {
         e.state='rim';
         e.rimDir = G.player ? (G.player.lane>e.lane ? 1 : -1) : 1;
         if(G.player&&e.lane===G.player.lane&&!G.player.dead&&G.invinc<=0){ hitPlayer(); G.enemies.splice(i,1); }
@@ -568,7 +593,7 @@ function killEnemy(e, zap) {
   }
 }
 
-function basePoints(e){ return [150,100,50,250][e.type]||100; }
+function basePoints(e){ return [150,100,50,250,200][e.type]||100; }
 
 function hitPlayer() {
   if(!G.player||G.invinc>0||G.player.dead) return;
@@ -802,25 +827,48 @@ function drawClaw(geo, lane, depth, col) {
 }
 
 function drawBullets(geo, bullets) {
+  // Authentic player charge: a small yellow diamond blip flying down the lane.
   ctx.save();
-  ctx.lineCap='round'; ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=2.5;
+  ctx.lineCap='round'; ctx.strokeStyle='#FFEE33'; ctx.fillStyle='#FFEE33'; ctx.lineWidth=2;
   for(const b of bullets){
-    const p0=lanePt(geo,b.lane,b.depth);
-    const p1=lanePt(geo,b.lane,Math.min(1,b.depth+0.09));
-    vecLine(p0.x,p0.y,p1.x,p1.y);
+    const p=lanePt(geo,b.lane,b.depth);
+    const sc=depthScale(b.depth), r=Math.min(W,H)*0.011*sc+2;
+    ctx.beginPath();
+    ctx.moveTo(p.x,p.y-r); ctx.lineTo(p.x+r,p.y);
+    ctx.lineTo(p.x,p.y+r); ctx.lineTo(p.x-r,p.y);
+    ctx.closePath(); ctx.fill();
   }
   ctx.restore();
 }
 
 function drawEBullets(geo, bullets) {
   ctx.save();
-  ctx.strokeStyle='#FF6600'; ctx.lineWidth=2;
+  ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=2;  // enemy shot = white (authentic)
   for(const b of bullets){
     const p=lanePt(geo,b.lane,b.depth);
     const p2=lanePt(geo,b.lane,Math.min(1,b.depth+0.05));
     ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2); ctx.stroke();
     vecLine(p.x,p.y,p2.x,p2.y);
   }
+  ctx.restore();
+}
+
+// A pulsing pulsar electrifies its entire lane — a bright white zig-zag
+// from rim to center. Drawn in world coordinates (no translate).
+function drawPulseLane(geo, lane) {
+  const rim=geo.lanes[lane].mid, ctr=geo.center;
+  const dx=ctr.x-rim.x, dy=ctr.y-rim.y, L=Math.hypot(dx,dy)||1;
+  const px=-dy/L, py=dx/L, segs=8;
+  ctx.save();
+  ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=2.4; ctx.lineCap='round';
+  ctx.beginPath();
+  for(let k=0;k<=segs;k++){
+    const f=k/segs, b=lerp2(rim,ctr,f);
+    const amp=(k%2?1:-1)*Math.min(W,H)*0.013*(1-f*0.55);
+    const x=b.x+px*amp, y=b.y+py*amp;
+    if(k===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -840,7 +888,7 @@ function drawEnemies(geo, enemies, webCol) {
     const sz    = Math.min(W,H)*0.022*sc;
     let   px, py;
 
-    if(e.type===ET.FLIPPER && e.flipping){
+    if(e.flipping){
       // Authentic cartwheel: rotate the body 180° about the shared rim
       // corner between the two lanes, so it tumbles end-over-end.
       const t     = smoothstep(e.flipProgress);
@@ -865,6 +913,9 @@ function drawEnemies(geo, enemies, webCol) {
       px=p.x; py=p.y;
     }
 
+    // Pulsing pulsar electrifies its whole lane (drawn in world coords).
+    if(e.type===ET.PULSAR && e.pulseOn && !e.flipping) drawPulseLane(geo, e.lane);
+
     ctx.save();
     ctx.translate(px,py);
     ctx.strokeStyle=col; ctx.lineWidth=1.6; ctx.lineCap='round';
@@ -879,77 +930,110 @@ function drawEnemies(geo, enemies, webCol) {
         const baseAng = Math.atan2(fb.y-cy, fb.x-cx);
         const tumble  = e.flipping ? (e.flipDir||1)*Math.PI*smoothstep(e.flipProgress) : 0;
         ctx.rotate(baseAng + Math.PI/2 + tumble);
-        const w=sz*1.35, h=sz*1.05;
+        // Linked chevrons: two wings sweep out to each side, meeting a
+        // notched central peak — the authentic flipper silhouette.
+        const w=sz*1.45, h=sz*0.95;
         ctx.lineWidth=2.0;
         ctx.beginPath();
-        ctx.moveTo(-w,-h); ctx.lineTo(0,0); ctx.lineTo(-w, h);  // left wing
-        ctx.moveTo( w,-h); ctx.lineTo(0,0); ctx.lineTo( w, h);  // right wing
+        ctx.moveTo(-w, -h*0.15);
+        ctx.lineTo(-w*0.4, h*0.25);
+        ctx.lineTo(0, -h*0.9);          // central peak (outer)
+        ctx.lineTo(w*0.4, h*0.25);
+        ctx.lineTo(w, -h*0.15);
         ctx.stroke();
-        // short outer edges cap the wings (the classic flipper silhouette)
-        ctx.lineWidth=1.5;
-        ctx.beginPath(); ctx.moveTo(-w,-h); ctx.lineTo(-w*0.62,-h); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(-w, h); ctx.lineTo(-w*0.62, h); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo( w,-h); ctx.lineTo( w*0.62,-h); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo( w, h); ctx.lineTo( w*0.62, h); ctx.stroke();
+        // lower notch V joining the inner wing points
+        ctx.beginPath();
+        ctx.moveTo(-w*0.4, h*0.25);
+        ctx.lineTo(0, h*0.75);
+        ctx.lineTo(w*0.4, h*0.25);
+        ctx.stroke();
         break;
       }
       case ET.TANKER: {
-        const p=1+0.18*Math.sin(e.angle*2.5);
-        ctx.lineWidth=1.8;
-        ctx.beginPath(); ctx.ellipse(0,0,sz*1.5*p,sz*1.1*p,0,0,Math.PI*2); ctx.stroke();
-        ctx.beginPath(); ctx.ellipse(0,0,sz*0.7*p,sz*0.5*p,0,0,Math.PI*2); ctx.stroke();
-        ctx.lineWidth=1.2;
-        for(let k=0;k<6;k++){
-          const ka=k/6*Math.PI*2+e.angle;
-          ctx.beginPath();
-          ctx.moveTo(Math.cos(ka)*sz*0.7, Math.sin(ka)*sz*0.5);
-          ctx.lineTo(Math.cos(ka)*sz*1.5, Math.sin(ka)*sz*1.1);
-          ctx.stroke();
-        }
+        // Purple double-cell hollow box, elongated along the tube.
+        const cx=geo.center.x, cy=geo.center.y;
+        ctx.rotate(Math.atan2(py-cy, px-cx));
+        const a=sz*1.5, b=sz*0.85;
+        ctx.lineWidth=1.9;
+        ctx.strokeRect(-a,-b,2*a,2*b);          // outer box
+        ctx.beginPath(); ctx.moveTo(0,-b); ctx.lineTo(0,b); ctx.stroke(); // divider -> two cells
         break;
       }
       case ET.SPIKER: {
-        ctx.rotate(e.angle*0.8);
-        ctx.lineWidth=1.6;
+        // Green outward-winding spiral that spins as it climbs.
+        ctx.lineWidth=1.7;
+        const turns=1.9, steps=26, maxR=sz*1.35;
         ctx.beginPath();
-        ctx.moveTo(0,-sz*1.4); ctx.lineTo(sz*0.8,sz*0.8);
-        ctx.lineTo(0,sz*0.3); ctx.lineTo(-sz*0.8,sz*0.8);
-        ctx.closePath(); ctx.stroke();
+        for(let k=0;k<=steps;k++){
+          const f=k/steps;
+          const a=e.angle*1.6 + f*turns*Math.PI*2;
+          const rr=maxR*f;
+          const x=Math.cos(a)*rr, y=Math.sin(a)*rr;
+          if(k===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        }
+        ctx.stroke();
         break;
       }
       case ET.FUSEBALL: {
-        ctx.lineWidth=1.5;
-        const spk=6+Math.floor(Math.random()*3);
-        for(let k=0;k<spk;k++){
-          const a=(k/spk)*Math.PI*2+e.angle*0.7;
-          const r1=sz*(0.3+Math.random()*0.4);
-          const r2=sz*(0.7+Math.random()*0.7);
-          ctx.beginPath();
-          ctx.moveTo(0,0);
-          ctx.lineTo(Math.cos(a)*r1+Math.random()*sz*0.2-sz*0.1, Math.sin(a)*r1+Math.random()*sz*0.2-sz*0.1);
-          ctx.lineTo(Math.cos(a)*r2, Math.sin(a)*r2);
-          ctx.stroke();
+        // Multi-colored spiky sea-urchin: 5 colored prongs that crackle.
+        const fc=['#FF2020','#FFDD00','#22FF22','#C040FF','#00E0E0'];
+        ctx.lineWidth=1.6;
+        for(let s=0;s<5;s++){
+          ctx.strokeStyle = e.hitFlash>0?'#FFFFFF':fc[s];
+          const secA=(s/5)*Math.PI*2 + e.angle*0.6;
+          for(let j=0;j<2;j++){
+            const a=secA + (j-0.5)*0.42;
+            const r1=sz*(0.25+Math.random()*0.25);
+            const r2=sz*(0.8+Math.random()*0.6);
+            ctx.beginPath();
+            ctx.moveTo(0,0);
+            ctx.lineTo(Math.cos(a)*r1, Math.sin(a)*r1);
+            ctx.lineTo(Math.cos(a)*r2, Math.sin(a)*r2);
+            ctx.stroke();
+          }
         }
-        ctx.fillStyle='#FFCCFF';
-        ctx.beginPath(); ctx.arc(0,0,sz*0.35,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle='#FFFFFF';
+        ctx.beginPath(); ctx.arc(0,0,sz*0.28,0,Math.PI*2); ctx.fill();
+        break;
+      }
+      case ET.PULSAR: {
+        // Turquoise zig-zag down the lane; flashes white & thickens while
+        // pulsing. Orients radially and cartwheels when flipping.
+        const cx=geo.center.x, cy=geo.center.y;
+        const fb = e.flipping ? lanePt(geo,e.flipFrom,depth) : {x:px,y:py};
+        const baseAng = Math.atan2(fb.y-cy, fb.x-cx);
+        const tumble  = e.flipping ? (e.flipDir||1)*Math.PI*smoothstep(e.flipProgress) : 0;
+        ctx.rotate(baseAng + Math.PI/2 + tumble);
+        ctx.strokeStyle = e.pulseOn ? '#FFFFFF' : col;
+        ctx.lineWidth   = e.pulseOn ? 2.6 : 1.8;
+        const h=sz*1.3, amp=sz*(e.pulseOn?0.85:0.5), N=5;
+        ctx.beginPath();
+        for(let k=0;k<=N;k++){
+          const y=-h + 2*h*(k/N);
+          const x=(k%2?1:-1)*amp;
+          if(k===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        }
+        ctx.stroke();
         break;
       }
     }
     ctx.restore();
   }
 }
-function enemyColor(t){ return [['#FF7700'],['#FF2222'],['#EEFF00'],['#FF44FF']][t][0]; }
+// Authentic arcade colors: flipper RED, tanker PURPLE, spiker GREEN,
+// fuseball multi-colored, pulsar TURQUOISE (white when pulsing).
+function enemyColor(t){ return ['#FF2020','#C040FF','#22FF22','#FFFFFF','#00E0E0'][t]||'#FFFFFF'; }
 
 function drawSpikes(geo, spikes) {
   ctx.save();
-  ctx.strokeStyle='#CCCC00'; ctx.lineWidth=2;
+  ctx.strokeStyle='#22FF22'; ctx.lineWidth=2;  // spikes are green (authentic)
   for(const s of spikes){
     const p0=lanePt(geo,s.lane,s.tipD);
     const p1=lanePt(geo,s.lane,Math.min(s.baseD,0.99));
     ctx.setLineDash([5,4]);
     vecLine(p0.x,p0.y,p1.x,p1.y);
     ctx.setLineDash([]);
-    ctx.fillStyle='#FFFF44';
+    ctx.fillStyle='#88FF88';
     ctx.beginPath(); ctx.arc(p0.x,p0.y,3.5,0,Math.PI*2); ctx.fill();
   }
   ctx.restore();
@@ -957,7 +1041,7 @@ function drawSpikes(geo, spikes) {
 
 function drawLiveSpikeTrails(geo, enemies) {
   ctx.save();
-  ctx.strokeStyle='#BBBB00'; ctx.lineWidth=1.8;
+  ctx.strokeStyle='#22CC22'; ctx.lineWidth=1.8;
   ctx.setLineDash([4,4]);
   for(const e of enemies){
     if(e.type!==ET.SPIKER || e.state!=='climbing') continue;
