@@ -797,32 +797,41 @@ function drawWeb(geo, col, scaleFrom1) {
   ctx.restore();
 }
 
+// Player claw — exact GUNPIC geometry from the Atari ROM (ALVROM.MAC).
+// Two prongs, pinched at the rim, splaying out + into the tube to wide
+// tips. t = across the rim (±1 = lane half-width), d = inward (0=rim,1=tip).
+const CLAW_L = [[0,0],[-0.2,0],[-0.4,0.4],[-0.8,0.4],[-1.0,1.0]];
+const CLAW_R = [[1.0,1.0],[0.8,0.4],[0.4,0.4],[0.2,0],[0,0]];
+// Exact ENER11 flipper outline (Atari ROM), normalized & recentered.
+const FLIPPER_PTS = [
+  [0.66,0.29],[0.59,1.0],[-0.13,0.49],[-0.41,0.44],[-0.74,0.22],[-0.84,0.17],
+  [-0.89,-0.05],[-0.95,0.05],[-1.0,0.27],[-1.0,-0.27],[-0.95,-0.05],[-0.89,0.05],
+  [-0.84,-0.17],[-0.74,-0.22],[-0.41,-0.44],[-0.13,-0.49],[0.59,-1.0],[0.66,-0.29],
+  [0.93,-0.22],[1.0,-0.12]
+];
 function drawClaw(geo, lane, depth, col) {
   const l   = geo.lanes[lane];
   const mid = depth===0 ? l.mid : lanePt(geo,lane,depth);
   const sc  = depthScale(depth);
-  const sz  = Math.min(W,H)*0.030*sc;
+  const halfW = Math.min(W,H)*0.032*sc;   // half lane width
+  const dLen  = halfW;                     // claw depth = half its width (ROM 80x40)
 
   const dx=l.rB.x-l.rA.x, dy=l.rB.y-l.rA.y;
   const rl=Math.sqrt(dx*dx+dy*dy)||1;
-  const tx=dx/rl, ty=dy/rl;
+  const tx=dx/rl, ty=dy/rl;                 // tangent (along rim)
   const ix=(geo.center.x-l.mid.x), iy=(geo.center.y-l.mid.y);
   const il=Math.sqrt(ix*ix+iy*iy)||1;
-  const nx=ix/il, ny=iy/il;
+  const nx=ix/il, ny=iy/il;                 // inward normal (toward center)
 
-  const pL  = {x:mid.x-tx*sz,    y:mid.y-ty*sz};
-  const pR  = {x:mid.x+tx*sz,    y:mid.y+ty*sz};
-  const tip = {x:mid.x+nx*sz*1.1,y:mid.y+ny*sz*1.1};
-  const pLi = {x:mid.x-tx*sz*0.45,y:mid.y-ty*sz*0.45};
-  const pRi = {x:mid.x+tx*sz*0.45,y:mid.y+ty*sz*0.45};
-
+  const P=(t,d)=>({x: mid.x + tx*t*halfW + nx*d*dLen, y: mid.y + ty*t*halfW + ny*d*dLen});
   ctx.save();
-  ctx.strokeStyle=col; ctx.lineWidth=2.2; ctx.lineCap='round';
-  vecLine(pL.x,pL.y,pR.x,pR.y);
-  vecLine(pLi.x,pLi.y,tip.x,tip.y);
-  vecLine(pRi.x,pRi.y,tip.x,tip.y);
-  vecLine(pL.x,pL.y,pLi.x,pLi.y);
-  vecLine(pR.x,pR.y,pRi.x,pRi.y);
+  ctx.strokeStyle=col; ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.beginPath();
+  CLAW_L.forEach((p,i)=>{ const q=P(p[0],p[1]); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
+  ctx.stroke();
+  ctx.beginPath();
+  CLAW_R.forEach((p,i)=>{ const q=P(p[0],p[1]); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); });
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -930,22 +939,12 @@ function drawEnemies(geo, enemies, webCol) {
         const baseAng = Math.atan2(fb.y-cy, fb.x-cx);
         const tumble  = e.flipping ? (e.flipDir||1)*Math.PI*smoothstep(e.flipProgress) : 0;
         ctx.rotate(baseAng + Math.PI/2 + tumble);
-        // Linked chevrons: two wings sweep out to each side, meeting a
-        // notched central peak — the authentic flipper silhouette.
-        const w=sz*1.45, h=sz*0.95;
-        ctx.lineWidth=2.0;
+        // Exact ENER11 flipper outline from the ROM — a symmetric
+        // butterfly. ROM x' maps to the radial axis, y' across the lane.
+        const s=sz*1.3;
+        ctx.lineWidth=1.9;
         ctx.beginPath();
-        ctx.moveTo(-w, -h*0.15);
-        ctx.lineTo(-w*0.4, h*0.25);
-        ctx.lineTo(0, -h*0.9);          // central peak (outer)
-        ctx.lineTo(w*0.4, h*0.25);
-        ctx.lineTo(w, -h*0.15);
-        ctx.stroke();
-        // lower notch V joining the inner wing points
-        ctx.beginPath();
-        ctx.moveTo(-w*0.4, h*0.25);
-        ctx.lineTo(0, h*0.75);
-        ctx.lineTo(w*0.4, h*0.25);
+        FLIPPER_PTS.forEach((p,i)=>{ const X=p[1]*s, Y=p[0]*s; i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
         ctx.stroke();
         break;
       }
