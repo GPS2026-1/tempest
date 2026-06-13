@@ -212,6 +212,16 @@ window.addEventListener('keydown', e=>{ if(!KEYS[e.code]) JP[e.code]=true; KEYS[
 window.addEventListener('keyup',   e=>{ KEYS[e.code]=false; });
 let moveCool=0, fireCool=0;
 
+// Analog spinner: accumulate relative mouse motion; click to fire / lock.
+let SPIN=0;
+const SPIN_STEP=13;                 // px of mouse travel per lane step
+canvas.addEventListener('mousemove', e=>{ SPIN += (e.movementX||0); });
+canvas.addEventListener('mousedown', e=>{
+  if(canvas.requestPointerLock && document.pointerLockElement!==canvas){ try{ canvas.requestPointerLock(); }catch(_){ } }
+  JP['Space']=true;                 // left-click also fires
+});
+canvas.style.cursor='crosshair';
+
 // ============================================================
 // SECTION 5 — GAME STATE
 // ============================================================
@@ -1078,7 +1088,7 @@ function drawAttractScreen() {
   mainCtx.fillText('INSERT COIN  ·  PRESS SPACE',CX,CY+sz*0.03);
   mainCtx.font=`${sz*0.024}px monospace`;
   mainCtx.fillStyle='#AAAAAA';
-  mainCtx.fillText('← → MOVE   SPACE FIRE   Z ZAPPER   P PAUSE',CX,CY+sz*0.10);
+  mainCtx.fillText('MOUSE / ← → MOVE    CLICK / SPACE FIRE    Z ZAPPER    P PAUSE',CX,CY+sz*0.10);
   mainCtx.restore();
 }
 
@@ -1154,6 +1164,15 @@ function handleInput(dt) {
   else if((KEYS['ArrowLeft']||KEYS['KeyA'])&&moveCool<=0) moveStep(-1);
   if(JP['ArrowRight']||JP['KeyD']) moveStep(1);
   else if((KEYS['ArrowRight']||KEYS['KeyD'])&&moveCool<=0) moveStep(1);
+
+  // Analog spinner: consume accumulated mouse travel into lane steps. Fast
+  // spin -> multiple steps per frame (the cabinet's fluid rotary feel).
+  let guard=0;
+  while(Math.abs(SPIN)>=SPIN_STEP && guard++<32){
+    const dir = SPIN>0 ? 1 : -1;
+    SPIN -= dir*SPIN_STEP;
+    moveStep(dir);
+  }
 
   // Fire: faster rate + faster bullets
   if(KEYS['Space']&&fireCool<=0){
